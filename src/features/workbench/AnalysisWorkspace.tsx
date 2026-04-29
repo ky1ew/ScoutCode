@@ -88,6 +88,8 @@ export function AnalysisWorkspace() {
     deleteDrawing,
     exportCsv,
     exportHtml,
+    exportVideo,
+    exportPlaylistVideo,
     selectEvent,
     selectPlaylist,
     clearError,
@@ -388,9 +390,9 @@ export function AnalysisWorkspace() {
             <Download size={16} />
             导出
           </button>
-          <button className="toolbar-button muted" type="button" disabled title="M3 实现">
+          <button className="toolbar-button" type="button" disabled={!selectedEvent} onClick={() => selectedEvent && void exportVideo(selectedEvent.id)} title="导出当前事件视频">
             <Settings size={16} />
-            设置
+            导出片段
           </button>
           <span className="status-dot" />
           <span className="status-text">{project ? "已保存" : isDesktop ? "等待项目" : "浏览器预览"}</span>
@@ -733,6 +735,7 @@ export function AnalysisWorkspace() {
               onRemoveItem={(itemId) => void removePlaylistItem(itemId)}
               onExportCsv={(playlistId) => void exportCsv(playlistId)}
               onExportHtml={(playlistId) => void exportHtml(playlistId)}
+              onExportPlaylistVideo={(playlistId) => void exportPlaylistVideo(playlistId)}
             />
           ) : null}
         </aside>
@@ -1041,6 +1044,7 @@ function PlaylistPanel({
   onRemoveItem,
   onExportCsv,
   onExportHtml,
+  onExportPlaylistVideo,
 }: {
   events: MatchEvent[];
   playlists: Playlist[];
@@ -1054,6 +1058,7 @@ function PlaylistPanel({
   onRemoveItem: (itemId: string) => void;
   onExportCsv: (playlistId?: string) => void;
   onExportHtml: (playlistId?: string) => void;
+  onExportPlaylistVideo: (playlistId: string) => void;
 }) {
   const byId = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
 
@@ -1114,6 +1119,9 @@ function PlaylistPanel({
             <button type="button" onClick={() => onExportHtml(selectedPlaylist.id)}>
               导出 HTML
             </button>
+            <button type="button" onClick={() => onExportPlaylistVideo(selectedPlaylist.id)}>
+              导出视频
+            </button>
           </div>
         </>
       ) : (
@@ -1124,7 +1132,7 @@ function PlaylistPanel({
         <span>导出 {exportJobs.length}</span>
         {exportJobs.slice(0, 2).map((job) => (
           <span title={job.outputPath} key={job.id}>
-            {job.type.toUpperCase()} / {job.status}
+            {job.type.toUpperCase()} / {job.status} / {job.progress}%
           </span>
         ))}
       </div>

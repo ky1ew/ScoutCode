@@ -49,6 +49,8 @@ type ProjectState = {
   deleteDrawing(id: string): Promise<void>;
   exportCsv(playlistId?: string): Promise<void>;
   exportHtml(playlistId?: string): Promise<void>;
+  exportVideo(eventId: string): Promise<void>;
+  exportPlaylistVideo(playlistId: string): Promise<void>;
   selectEvent(id: string | null): void;
   selectPlaylist(id: string | null): void;
   clearError(): void;
@@ -430,6 +432,28 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     [api, project, run],
   );
 
+  const exportVideo = useCallback(
+    async (eventId: string) => {
+      if (!api || !project) return;
+      await run(async () => {
+        const job = await api.exports.exportVideo({ projectId: project.id, eventId, includeOverlay: true });
+        setExportJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      });
+    },
+    [api, project, run],
+  );
+
+  const exportPlaylistVideo = useCallback(
+    async (playlistId: string) => {
+      if (!api || !project) return;
+      await run(async () => {
+        const job = await api.exports.exportPlaylistVideo({ projectId: project.id, playlistId, includeOverlay: true });
+        setExportJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      });
+    },
+    [api, project, run],
+  );
+
   const value = useMemo<ProjectState>(
     () => ({
       project,
@@ -463,6 +487,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       deleteDrawing,
       exportCsv,
       exportHtml,
+      exportVideo,
+      exportPlaylistVideo,
       selectEvent: setSelectedEventId,
       selectPlaylist: setSelectedPlaylistId,
       clearError: () => setError(null),
@@ -499,6 +525,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       deleteDrawing,
       exportCsv,
       exportHtml,
+      exportVideo,
+      exportPlaylistVideo,
     ],
   );
 
