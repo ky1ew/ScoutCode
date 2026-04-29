@@ -6,6 +6,8 @@ import type {
   CreatePlaylistInput,
   CreateProjectInput,
   ExportReportInput,
+  ExportPlaylistVideoInput,
+  ExportVideoInput,
   ImportEventsInput,
   ImportVideoInput,
   SaveDrawingInput,
@@ -50,6 +52,8 @@ const desktopApi: DesktopApi = {
     listExportJobs: (projectId: string) => ipcRenderer.invoke("exports:listJobs", projectId),
     exportCsv: (input: ExportReportInput) => ipcRenderer.invoke("exports:csv", input),
     exportHtml: (input: ExportReportInput) => ipcRenderer.invoke("exports:html", input),
+    exportVideo: (input: ExportVideoInput) => ipcRenderer.invoke("exports:video", input),
+    exportPlaylistVideo: (input: ExportPlaylistVideoInput) => ipcRenderer.invoke("exports:playlistVideo", input),
   },
   imports: {
     importCsvEvents: (input: ImportEventsInput) => ipcRenderer.invoke("imports:csvEvents", input),

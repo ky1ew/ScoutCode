@@ -17,7 +17,9 @@ import type {
   Drawing,
   DrawingLayer,
   ExportJob,
+  ExportPlaylistVideoInput,
   ExportReportInput,
+  ExportVideoInput,
   ImportEventsInput,
   ImportResult,
   ImportVideoInput,
@@ -136,6 +138,10 @@ type ExportJobRow = {
   type: ExportJob["type"];
   status: ExportJob["status"];
   progress: number;
+  format?: "mp4" | "mov" | "webm";
+  duration_ms?: number;
+  ffmpeg_args_json?: string;
+  metadata_json?: string;
   output_path?: string;
   error_message?: string;
   created_at: string;
@@ -755,6 +761,43 @@ export class ProjectStore {
     return this.createExportJob(context, input.projectId, "html", outputPath);
   }
 
+  async exportVideo(input: ExportVideoInput): Promise<ExportJob> {
+    const context = this.requireContext(input.projectId);
+    const event = this.getEventById(context.db, input.eventId);
+    if (!event) throw new Error("Event not found");
+    const range = normalizeEventRange(event.startMs - (input.preRollMs ?? 3000), event.endMs + (input.postRollMs ?? 3000));
+    return this.renderVideoJob(context, {
+      projectId: input.projectId,
+      type: "video_clip",
+      format: input.format ?? "mp4",
+      includeOverlay: input.includeOverlay ?? false,
+      ranges: [{ mediaId: event.mediaId, startMs: range.startMs, endMs: range.endMs }],
+    });
+  }
+
+  async exportPlaylistVideo(input: ExportPlaylistVideoInput): Promise<ExportJob> {
+    const context = this.requireContext(input.projectId);
+    const playlist = this.getPlaylistById(context.db, input.playlistId);
+    if (!playlist) throw new Error("Playlist not found");
+    const eventsById = new Map(this.listEventsFromDb(context.db, input.projectId).map((event) => [event.id, event]));
+    const ranges = playlist.items
+      .map((item) => {
+        const event = eventsById.get(item.eventId);
+        if (!event) return null;
+        const range = normalizeEventRange(event.startMs - item.preRollMs, event.endMs + item.postRollMs);
+        return { mediaId: event.mediaId, startMs: range.startMs, endMs: range.endMs };
+      })
+      .filter((item): item is { mediaId: string; startMs: number; endMs: number } => Boolean(item));
+    return this.renderVideoJob(context, {
+      projectId: input.projectId,
+      type: "video_playlist",
+      format: input.format ?? "mp4",
+      includeOverlay: input.includeOverlay ?? false,
+      playlistId: input.playlistId,
+      ranges,
+    });
+  }
+
   resolveMediaPath(mediaId: string): string | null {
     if (this.mediaPaths.has(mediaId)) {
       return this.mediaPaths.get(mediaId) ?? null;
@@ -1008,6 +1051,7 @@ export class ProjectStore {
     projectId: string,
     type: ExportJob["type"],
     outputPath: string,
+    patch: Partial<Pick<ExportJob, "format" | "durationMs" | "ffmpegArgs" | "metadata">> = {},
   ): ExportJob {
     const now = new Date().toISOString();
     const job: ExportJob = {
@@ -1016,16 +1060,74 @@ export class ProjectStore {
       type,
       status: "completed",
       progress: 100,
+      format: patch.format,
+      durationMs: patch.durationMs,
+      ffmpegArgs: patch.ffmpegArgs,
+      metadata: patch.metadata,
       outputPath,
       createdAt: now,
       updatedAt: now,
     };
     context.db.prepare(
       `INSERT INTO export_jobs (
-        id, project_id, type, status, progress, output_path, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(job.id, job.projectId, job.type, job.status, job.progress, job.outputPath ?? null, job.createdAt, job.updatedAt);
+        id, project_id, type, status, progress, format, duration_ms, ffmpeg_args_json, metadata_json, output_path, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      job.id,
+      job.projectId,
+      job.type,
+      job.status,
+      job.progress,
+      job.format ?? null,
+      job.durationMs ?? null,
+      job.ffmpegArgs ? JSON.stringify(job.ffmpegArgs) : null,
+      job.metadata ? JSON.stringify(job.metadata) : null,
+      job.outputPath ?? null,
+      job.createdAt,
+      job.updatedAt,
+    );
     return job;
+  }
+
+  private async renderVideoJob(
+    context: ProjectContext,
+    input: {
+      projectId: string;
+      type: ExportJob["type"];
+      format: "mp4" | "mov" | "webm";
+      includeOverlay: boolean;
+      ranges: Array<{ mediaId: string; startMs: number; endMs: number }>;
+      playlistId?: string;
+    },
+  ): Promise<ExportJob> {
+    if (input.ranges.length === 0) throw new Error("No clips to export");
+    const nowFile = new Date().toISOString().replace(/[:.]/g, "-");
+    const outputPath = join(context.projectPath, "exports", `${input.type}-${nowFile}.${input.format}`);
+    const args = buildFfmpegArgs(input.ranges.map((r) => ({ ...r, sourcePath: this.resolveMediaPath(r.mediaId) ?? "" })), outputPath, input.includeOverlay);
+    try {
+      await execFileAsync("ffmpeg", args);
+      const durationMs = input.ranges.reduce((sum, r) => sum + Math.max(0, r.endMs - r.startMs), 0);
+      return this.createExportJob(context, input.projectId, input.type, outputPath, {
+        format: input.format,
+        durationMs,
+        ffmpegArgs: args,
+        metadata: { clipCount: input.ranges.length, playlistId: input.playlistId, includeOverlay: input.includeOverlay },
+      });
+    } catch (error) {
+      const failed = this.createExportJob(context, input.projectId, input.type, outputPath, {
+        format: input.format,
+        ffmpegArgs: args,
+        metadata: { clipCount: input.ranges.length, playlistId: input.playlistId, includeOverlay: input.includeOverlay },
+      });
+      context.db.prepare("UPDATE export_jobs SET status = ?, progress = ?, error_message = ?, updated_at = ? WHERE id = ?").run(
+        "failed",
+        0,
+        error instanceof Error ? error.message : "ffmpeg failed",
+        new Date().toISOString(),
+        failed.id,
+      );
+      return { ...failed, status: "failed", progress: 0, errorMessage: error instanceof Error ? error.message : "ffmpeg failed" };
+    }
   }
 
   private resolveExportEvents(db: DatabaseSync, input: ExportReportInput): MatchEvent[] {
@@ -1171,11 +1273,51 @@ function exportJobFromRow(row: ExportJobRow): ExportJob {
     type: row.type,
     status: row.status,
     progress: row.progress,
+    format: row.format,
+    durationMs: row.duration_ms ?? undefined,
+    ffmpegArgs: row.ffmpeg_args_json ? (JSON.parse(row.ffmpeg_args_json) as string[]) : undefined,
+    metadata: row.metadata_json
+      ? (JSON.parse(row.metadata_json) as { clipCount?: number; playlistId?: string; includeOverlay?: boolean })
+      : undefined,
     outputPath: row.output_path ?? undefined,
     errorMessage: row.error_message ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export function buildFfmpegArgs(
+  clips: Array<{ sourcePath: string; startMs: number; endMs: number }>,
+  outputPath: string,
+  includeOverlay: boolean,
+): string[] {
+  if (clips.length === 0) {
+    throw new Error("No clips to render");
+  }
+  const args: string[] = ["-y"];
+  const concatInputs: string[] = [];
+  clips.forEach((clip, index) => {
+    if (!clip.sourcePath) {
+      throw new Error("Media path could not be resolved");
+    }
+    args.push("-ss", String(clip.startMs / 1000), "-to", String(clip.endMs / 1000), "-i", clip.sourcePath);
+    concatInputs.push(`[${index}:v:0][${index}:a:0]`);
+  });
+  const overlayFilter = includeOverlay ? ",drawbox=x=40:y=40:w=280:h=80:color=black@0.35:t=fill" : "";
+  args.push(
+    "-filter_complex",
+    `${concatInputs.join("")}concat=n=${clips.length}:v=1:a=1[v][a];[v]format=yuv420p${overlayFilter}[vout]`,
+    "-map",
+    "[vout]",
+    "-map",
+    "[a]",
+    "-c:v",
+    "libx264",
+    "-c:a",
+    "aac",
+    outputPath,
+  );
+  return args;
 }
 
 function parseStringArray(value: string): string[] {

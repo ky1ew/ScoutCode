@@ -7,6 +7,8 @@ import type {
   Drawing,
   ExportJob,
   ExportReportInput,
+  ExportPlaylistVideoInput,
+  ExportVideoInput,
   ImportEventsInput,
   ImportResult,
   ImportVideoInput,
@@ -57,6 +59,8 @@ export type DesktopApi = {
     listExportJobs(projectId: string): Promise<ExportJob[]>;
     exportCsv(input: ExportReportInput): Promise<ExportJob>;
     exportHtml(input: ExportReportInput): Promise<ExportJob>;
+    exportVideo(input: ExportVideoInput): Promise<ExportJob>;
+    exportPlaylistVideo(input: ExportPlaylistVideoInput): Promise<ExportJob>;
   };
   imports: {
     importCsvEvents(input: ImportEventsInput): Promise<ImportResult>;
