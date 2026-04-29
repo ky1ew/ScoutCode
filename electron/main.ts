@@ -9,6 +9,8 @@ import type {
   CreatePlaylistInput,
   CreateProjectInput,
   ExportReportInput,
+  ExportPlaylistVideoInput,
+  ExportVideoInput,
   ImportEventsInput,
   ImportVideoInput,
   SaveDrawingInput,
@@ -131,6 +133,10 @@ function registerIpc(): void {
   ipcMain.handle("exports:listJobs", (_event, projectId: string) => projectStore.listExportJobs(projectId));
   ipcMain.handle("exports:csv", (_event, input: ExportReportInput) => projectStore.exportCsv(input));
   ipcMain.handle("exports:html", (_event, input: ExportReportInput) => projectStore.exportHtml(input));
+  ipcMain.handle("exports:video", (_event, input: ExportVideoInput) => projectStore.exportVideo(input));
+  ipcMain.handle("exports:playlistVideo", (_event, input: ExportPlaylistVideoInput) =>
+    projectStore.exportPlaylistVideo(input),
+  );
 
   ipcMain.handle("imports:csvEvents", (_event, input: ImportEventsInput) => projectStore.importCsvEvents(input));
 }

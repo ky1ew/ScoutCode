@@ -173,9 +173,17 @@ export type Point = {
 export type ExportJob = {
   id: string;
   projectId: string;
-  type: "csv" | "html" | "pdf" | "mp4" | "zip";
+  type: "csv" | "html" | "pdf" | "mp4" | "zip" | "video_clip" | "video_playlist";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
+  format?: "mp4" | "mov" | "webm";
+  durationMs?: number;
+  ffmpegArgs?: string[];
+  metadata?: {
+    clipCount?: number;
+    playlistId?: string;
+    includeOverlay?: boolean;
+  };
   outputPath?: string;
   errorMessage?: string;
   createdAt: string;
@@ -279,6 +287,22 @@ export type SaveDrawingInput = {
 export type ExportReportInput = {
   projectId: string;
   playlistId?: string;
+};
+
+export type ExportVideoInput = {
+  projectId: string;
+  eventId: string;
+  format?: "mp4" | "mov" | "webm";
+  preRollMs?: number;
+  postRollMs?: number;
+  includeOverlay?: boolean;
+};
+
+export type ExportPlaylistVideoInput = {
+  projectId: string;
+  playlistId: string;
+  format?: "mp4" | "mov" | "webm";
+  includeOverlay?: boolean;
 };
 
 export type ImportResult = {
