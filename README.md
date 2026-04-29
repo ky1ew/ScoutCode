@@ -1,6 +1,6 @@
 # ScoutCode
 
-ScoutCode is a Windows-first, local-first football video analysis workstation.
+ScoutCode is a Windows-first, local-first football (soccer) video analysis workstation.
 
 This repository currently implements the M0-M2 vertical slice:
 
@@ -26,4 +26,8 @@ npm run smoke:electron
 
 ## MVP Boundary
 
-Playlist, tactical drawing persistence, report/video export, CSV/XML import, and Windows installer packaging are intentionally left as disabled M3+ entry points in this slice.
+Windows installer packaging and full video export are intentionally left as M3+ work in this slice.
+
+## License
+
+Apache-2.0. See `LICENSE`.
