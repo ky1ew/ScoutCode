@@ -567,13 +567,16 @@ kbd {
 }
 
 .tabs {
+  display: flex;
   height: 42px;
+  overflow-x: auto;
   border-bottom: 1px solid var(--border);
   background: #151a21;
 }
 
 .tabs button {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 58px;
   height: 100%;
   border-width: 0 0 2px;
   border-radius: 0;
@@ -589,7 +592,8 @@ kbd {
 
 .detail-form,
 .filters,
-.event-list {
+.event-list,
+.inspector-stack {
   display: grid;
   gap: 10px;
   padding: 14px;
@@ -604,7 +608,9 @@ kbd {
 .detail-form input,
 .detail-form select,
 .detail-form textarea,
-.start-input input {
+.start-input input,
+.inspector-stack input,
+.inspector-stack textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -614,12 +620,14 @@ kbd {
 
 .detail-form input,
 .detail-form select,
-.start-input input {
+.start-input input,
+.inspector-stack input {
   height: 34px;
   padding: 0 10px;
 }
 
-.detail-form textarea {
+.detail-form textarea,
+.inspector-stack textarea {
   resize: vertical;
   padding: 9px 10px;
 }
@@ -708,6 +716,103 @@ kbd {
   display: grid;
   gap: 12px;
   padding: 14px;
+}
+
+.wide-action {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric-card,
+.compact-section,
+.candidate-card,
+.player-card,
+.topic-card,
+.migration-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #1a2028;
+}
+
+.metric-card strong {
+  color: var(--text-strong);
+  font-size: 20px;
+}
+
+.metric-card small,
+.compact-section span,
+.candidate-card p,
+.candidate-card span,
+.player-card span,
+.topic-card span,
+.topic-card p,
+.migration-card span,
+.migration-card p,
+.migration-card small {
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.compact-section h3,
+.template-edit-group h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.mini-row {
+  display: grid;
+  gap: 3px;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 9px;
+}
+
+.candidate-card > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+
+.candidate-card > div,
+.inline-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.candidate-card > div {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.template-edit-group {
+  display: grid;
+  gap: 8px;
+}
+
+.template-edit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 62px;
+  gap: 6px;
 }
 
 .playlist-actions,

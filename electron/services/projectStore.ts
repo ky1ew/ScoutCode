@@ -10,10 +10,14 @@ import { schemaSql } from "../database/schema.js";
 import { createDefaultFootballTemplate } from "../../shared/defaultTemplate.js";
 import type {
   AddEventToPlaylistInput,
+  AiCandidate,
+  CommitMigrationInput,
   CodingTemplate,
   CreateEventInput,
   CreatePlaylistInput,
+  CreatePlayerInput,
   CreateProjectInput,
+  CreateTrainingTopicInput,
   Drawing,
   DrawingLayer,
   ExportJob,
@@ -26,14 +30,20 @@ import type {
   MatchEvent,
   MediaAsset,
   MediaProbeResult,
+  MigrationPreview,
   Playlist,
   PlaylistItem,
+  Player,
   Project,
   ProjectManifest,
   ProjectOpenResult,
   RecentProject,
+  ReviewSummary,
   SaveDrawingInput,
+  SaveTemplateInput,
+  TrainingTopic,
   UpdateEventInput,
+  UpdatePlayerInput,
 } from "../../shared/domain.js";
 import { normalizeEventRange, parseTimecode } from "../../shared/time.js";
 
@@ -148,6 +158,46 @@ type ExportJobRow = {
   updated_at: string;
 };
 
+type PlayerRow = {
+  id: string;
+  project_id: string;
+  name: string;
+  number?: string;
+  position?: string;
+  strengths?: string;
+  improvements?: string;
+  coach_note?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type TrainingTopicRow = {
+  id: string;
+  project_id: string;
+  title: string;
+  phase?: MatchEvent["phase"];
+  priority: TrainingTopic["priority"];
+  evidence_event_ids_json: string;
+  recommendation: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type AiCandidateRow = {
+  id: string;
+  project_id: string;
+  media_id: string;
+  start_ms: number;
+  end_ms: number;
+  event_type: string;
+  phase?: MatchEvent["phase"];
+  confidence: number;
+  reason: string;
+  status: AiCandidate["status"];
+  created_at: string;
+  updated_at: string;
+};
+
 export class ProjectStore {
   private readonly contexts = new Map<string, ProjectContext>();
   private readonly mediaPaths = new Map<string, string>();
@@ -226,6 +276,9 @@ export class ProjectStore {
       playlists: [],
       drawings: [],
       exportJobs: [],
+      players: [],
+      trainingTopics: [],
+      aiCandidates: [],
     };
   }
 
@@ -258,6 +311,9 @@ export class ProjectStore {
     const playlists = this.listPlaylistsFromDb(db, project.id);
     const drawings = this.listDrawingsFromDb(db, project.id);
     const exportJobs = this.listExportJobsFromDb(db, project.id);
+    const players = this.listPlayersFromDb(db, project.id);
+    const trainingTopics = this.listTrainingTopicsFromDb(db, project.id);
+    const aiCandidates = this.listAiCandidatesFromDb(db, project.id);
     const finalTemplates = templates.length > 0 ? templates : [this.ensureDefaultTemplate(db, project.id)];
 
     this.contexts.set(project.id, { projectId: project.id, projectPath, db });
@@ -268,7 +324,19 @@ export class ProjectStore {
       lastOpenedAt: new Date().toISOString(),
     });
 
-    return { projectPath, project, mediaAssets, events, templates: finalTemplates, playlists, drawings, exportJobs };
+    return {
+      projectPath,
+      project,
+      mediaAssets,
+      events,
+      templates: finalTemplates,
+      playlists,
+      drawings,
+      exportJobs,
+      players,
+      trainingTopics,
+      aiCandidates,
+    };
   }
 
   listRecentProjects(): RecentProject[] {
@@ -415,6 +483,51 @@ export class ProjectStore {
       importedCount: created.length,
       skippedCount,
       events: created,
+      warnings,
+    };
+  }
+
+  private importXmlEvents(input: CommitMigrationInput): ImportResult {
+    const context = this.requireContext(input.projectId);
+    const mediaId = input.mediaId ?? this.listMediaFromDb(context.db, input.projectId, context.projectPath)[0]?.id;
+    if (!mediaId) {
+      throw new Error("Import needs a project video first");
+    }
+
+    const xml = readFileSync(input.sourcePath, "utf8");
+    const records = parseXmlEvents(xml);
+    const events: MatchEvent[] = [];
+    const warnings: string[] = [];
+    for (const record of records) {
+      const startMs = parseCsvTime(record.start);
+      const endMs = parseCsvTime(record.end);
+      if (startMs === null) {
+        warnings.push(`Skipped XML event without start time: ${record.name ?? "unknown"}`);
+        continue;
+      }
+      const range = normalizeEventRange(startMs, endMs ?? startMs + 10_000, startMs, 10_000);
+      events.push(
+        this.createEvent({
+          projectId: input.projectId,
+          mediaId,
+          startMs: range.startMs,
+          endMs: range.endMs,
+          eventType: record.name ?? "imported_xml_event",
+          phase: parsePhase(record.phase),
+          playerName: record.player,
+          note: record.note,
+          tags: splitTags(record.tags),
+          source: "imported",
+          confirmed: true,
+        }),
+      );
+    }
+
+    return {
+      sourcePath: input.sourcePath,
+      importedCount: events.length,
+      skippedCount: warnings.length,
+      events,
       warnings,
     };
   }
@@ -600,6 +713,275 @@ export class ProjectStore {
   listTemplates(projectId: string): CodingTemplate[] {
     const context = this.requireContext(projectId);
     return this.listTemplatesFromDb(context.db, projectId);
+  }
+
+  saveTemplate(input: SaveTemplateInput): CodingTemplate {
+    const context = this.requireContext(input.projectId);
+    const now = new Date().toISOString();
+    const template: CodingTemplate = {
+      ...input.template,
+      sport: "football",
+      updatedAt: now,
+      createdAt: input.template.createdAt || now,
+    };
+
+    context.db.prepare("DELETE FROM templates WHERE project_id = ? AND id = ?").run(input.projectId, template.id);
+    context.db.prepare("DELETE FROM template_buttons WHERE template_id = ?").run(template.id);
+    context.db.prepare(
+      `INSERT INTO templates (
+        id, project_id, name, sport, version, template_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      template.id,
+      input.projectId,
+      template.name,
+      template.sport,
+      template.version,
+      JSON.stringify(template),
+      template.createdAt,
+      template.updatedAt,
+    );
+
+    for (const group of template.groups) {
+      for (const button of group.buttons) {
+        context.db.prepare(
+          `INSERT INTO template_buttons (
+            id, template_id, group_id, label, event_type, phase, hotkey, color, default_duration_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          button.id,
+          template.id,
+          group.id,
+          button.label,
+          button.eventType,
+          button.phase ?? group.phase,
+          button.hotkey ?? null,
+          button.color,
+          button.defaultDurationMs ?? null,
+        );
+      }
+    }
+
+    return template;
+  }
+
+  async importTemplate(projectId: string): Promise<CodingTemplate | null> {
+    this.requireContext(projectId);
+    const result = await dialog.showOpenDialog({
+      title: "Import coding template",
+      properties: ["openFile"],
+      filters: [{ name: "Template JSON", extensions: ["json"] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    const parsed = JSON.parse(readFileSync(result.filePaths[0], "utf8")) as CodingTemplate;
+    return this.saveTemplate({
+      projectId,
+      template: {
+        ...parsed,
+        id: parsed.id || randomUUID(),
+        version: parsed.version || 1,
+        groups: parsed.groups ?? [],
+      },
+    });
+  }
+
+  generateReview(projectId: string): ReviewSummary {
+    const context = this.requireContext(projectId);
+    const events = this.listEventsFromDb(context.db, projectId);
+    const trainingTopics = this.generateTrainingTopics(projectId);
+    const phaseLabels: Record<NonNullable<MatchEvent["phase"]>, string> = {
+      attack: "进攻",
+      defense: "防守",
+      transition: "转换",
+      set_piece: "定位球",
+    };
+    const phaseCards = (Object.keys(phaseLabels) as Array<NonNullable<MatchEvent["phase"]>>).map((phase) => {
+      const phaseEvents = events.filter((event) => event.phase === phase);
+      return {
+        phase,
+        label: phaseLabels[phase],
+        count: phaseEvents.length,
+        keyEventIds: phaseEvents.slice(0, 5).map((event) => event.id),
+        coachingPoint: coachingPointForPhase(phase, phaseEvents),
+      };
+    });
+    const playerReports = playerReportsFromEvents(events);
+    const coachPlaylistName = "赛后复盘关键片段";
+    let playlist = this.listPlaylistsFromDb(context.db, projectId).find((item) => item.name === coachPlaylistName);
+    if (!playlist) {
+      playlist = this.createPlaylist({ projectId, name: coachPlaylistName, purpose: "coach_review" });
+    }
+    const existingIds = new Set(playlist.items.map((item) => item.eventId));
+    for (const event of events.slice(0, 12)) {
+      if (!existingIds.has(event.id)) {
+        this.addEventToPlaylist({ playlistId: playlist.id, eventId: event.id, title: event.eventType });
+      }
+    }
+
+    return {
+      projectId,
+      generatedAt: new Date().toISOString(),
+      phaseCards,
+      coachPlaylistName,
+      playerReports,
+      trainingTopics,
+    };
+  }
+
+  listAiCandidates(projectId: string): AiCandidate[] {
+    const context = this.requireContext(projectId);
+    return this.listAiCandidatesFromDb(context.db, projectId);
+  }
+
+  generateAiCandidates(projectId: string): AiCandidate[] {
+    const context = this.requireContext(projectId);
+    const events = this.listEventsFromDb(context.db, projectId);
+    const media = this.listMediaFromDb(context.db, projectId, context.projectPath)[0];
+    if (!media) {
+      return this.listAiCandidatesFromDb(context.db, projectId);
+    }
+
+    const now = new Date().toISOString();
+    const suggestions = buildAiSuggestions(projectId, media.id, events, media.durationMs);
+    for (const candidate of suggestions) {
+      const duplicate = context.db
+        .prepare("SELECT id FROM ai_candidates WHERE project_id = ? AND start_ms = ? AND event_type = ?")
+        .get(projectId, candidate.startMs, candidate.eventType);
+      if (duplicate) {
+        continue;
+      }
+      context.db.prepare(
+        `INSERT INTO ai_candidates (
+          id, project_id, media_id, start_ms, end_ms, event_type, phase, confidence, reason, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        candidate.id,
+        candidate.projectId,
+        candidate.mediaId,
+        candidate.startMs,
+        candidate.endMs,
+        candidate.eventType,
+        candidate.phase ?? null,
+        candidate.confidence,
+        candidate.reason,
+        "pending",
+        now,
+        now,
+      );
+    }
+
+    return this.listAiCandidatesFromDb(context.db, projectId);
+  }
+
+  confirmAiCandidate(id: string): { event: MatchEvent; candidates: AiCandidate[] } {
+    const context = this.findContextByAiCandidate(id);
+    const candidate = this.getAiCandidateById(context.db, id);
+    if (!candidate) {
+      throw new Error("AI candidate not found");
+    }
+
+    const event = this.createEvent({
+      projectId: candidate.projectId,
+      mediaId: candidate.mediaId,
+      startMs: candidate.startMs,
+      endMs: candidate.endMs,
+      eventType: candidate.eventType,
+      phase: candidate.phase,
+      source: "ai_suggested",
+      confirmed: true,
+      note: candidate.reason,
+    });
+    context.db
+      .prepare("UPDATE ai_candidates SET status = ?, updated_at = ? WHERE id = ?")
+      .run("confirmed", new Date().toISOString(), id);
+
+    return { event, candidates: this.listAiCandidatesFromDb(context.db, candidate.projectId) };
+  }
+
+  ignoreAiCandidate(id: string): AiCandidate[] {
+    const context = this.findContextByAiCandidate(id);
+    const candidate = this.getAiCandidateById(context.db, id);
+    if (!candidate) {
+      throw new Error("AI candidate not found");
+    }
+    context.db
+      .prepare("UPDATE ai_candidates SET status = ?, updated_at = ? WHERE id = ?")
+      .run("ignored", new Date().toISOString(), id);
+    return this.listAiCandidatesFromDb(context.db, candidate.projectId);
+  }
+
+  listPlayers(projectId: string): Player[] {
+    const context = this.requireContext(projectId);
+    return this.ensurePlayersFromEvents(context.db, projectId);
+  }
+
+  createPlayer(input: CreatePlayerInput): Player {
+    const context = this.requireContext(input.projectId);
+    return this.upsertPlayer(context.db, input.projectId, input.name, input);
+  }
+
+  updatePlayer(id: string, patch: UpdatePlayerInput): Player {
+    const context = this.findContextByPlayer(id);
+    const existing = this.getPlayerById(context.db, id);
+    if (!existing) {
+      throw new Error("Player not found");
+    }
+    const next = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    context.db.prepare(
+      `UPDATE players SET name = ?, number = ?, position = ?, strengths = ?, improvements = ?, coach_note = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+      next.name,
+      next.number ?? null,
+      next.position ?? null,
+      next.strengths ?? null,
+      next.improvements ?? null,
+      next.coachNote ?? null,
+      next.updatedAt,
+      id,
+    );
+    return next;
+  }
+
+  listTrainingTopics(projectId: string): TrainingTopic[] {
+    const context = this.requireContext(projectId);
+    return this.listTrainingTopicsFromDb(context.db, projectId);
+  }
+
+  generateTrainingTopics(projectId: string): TrainingTopic[] {
+    const context = this.requireContext(projectId);
+    const events = this.listEventsFromDb(context.db, projectId);
+    const generated = buildTrainingTopics(projectId, events);
+    for (const topic of generated) {
+      const duplicate = context.db
+        .prepare("SELECT id FROM training_topics WHERE project_id = ? AND title = ?")
+        .get(projectId, topic.title);
+      if (duplicate) {
+        continue;
+      }
+      this.insertTrainingTopic(context.db, topic);
+    }
+    return this.listTrainingTopicsFromDb(context.db, projectId);
+  }
+
+  createTrainingTopic(input: CreateTrainingTopicInput): TrainingTopic {
+    const context = this.requireContext(input.projectId);
+    const now = new Date().toISOString();
+    const topic: TrainingTopic = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      title: input.title.trim() || "训练主题",
+      phase: input.phase,
+      priority: input.priority,
+      evidenceEventIds: input.evidenceEventIds ?? [],
+      recommendation: input.recommendation,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.insertTrainingTopic(context.db, topic);
+    return topic;
   }
 
   listPlaylists(projectId: string): Playlist[] {
@@ -798,6 +1180,69 @@ export class ProjectStore {
     });
   }
 
+  exportBackup(projectId: string): ExportJob {
+    const context = this.requireContext(projectId);
+    const project = this.getProject(context.db, projectId);
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      project,
+      mediaAssets: this.listMediaFromDb(context.db, projectId, context.projectPath),
+      events: this.listEventsFromDb(context.db, projectId),
+      templates: this.listTemplatesFromDb(context.db, projectId),
+      playlists: this.listPlaylistsFromDb(context.db, projectId),
+      drawings: this.listDrawingsFromDb(context.db, projectId),
+      players: this.listPlayersFromDb(context.db, projectId),
+      trainingTopics: this.listTrainingTopicsFromDb(context.db, projectId),
+      aiCandidates: this.listAiCandidatesFromDb(context.db, projectId),
+    };
+    const now = new Date().toISOString().replace(/[:.]/g, "-");
+    const outputPath = join(context.projectPath, "backups", `scoutcode-backup-${now}.json`);
+    writeFileSync(outputPath, JSON.stringify(backup, null, 2), "utf8");
+    return this.createExportJob(context, projectId, "zip", outputPath, {
+      metadata: { clipCount: backup.events.length },
+    });
+  }
+
+  async previewMigration(projectId: string): Promise<MigrationPreview | null> {
+    this.requireContext(projectId);
+    const result = await dialog.showOpenDialog({
+      title: "Preview Sportscode migration file",
+      properties: ["openFile"],
+      filters: [
+        { name: "Migration files", extensions: ["csv", "xml", "json"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    return previewMigrationFile(result.filePaths[0]);
+  }
+
+  async commitMigration(input: CommitMigrationInput): Promise<ImportResult> {
+    if (input.kind === "template_json") {
+      const template = JSON.parse(readFileSync(input.sourcePath, "utf8")) as CodingTemplate;
+      this.saveTemplate({ projectId: input.projectId, template });
+      return {
+        sourcePath: input.sourcePath,
+        importedCount: 1,
+        skippedCount: 0,
+        events: [],
+        warnings: ["已导入 Coding 模板。"],
+      };
+    }
+
+    if (input.kind === "xml") {
+      return this.importXmlEvents(input);
+    }
+
+    return this.importCsvEvents({
+      projectId: input.projectId,
+      mediaId: input.mediaId,
+      sourcePath: input.sourcePath,
+    });
+  }
+
   resolveMediaPath(mediaId: string): string | null {
     if (this.mediaPaths.has(mediaId)) {
       return this.mediaPaths.get(mediaId) ?? null;
@@ -946,6 +1391,26 @@ export class ProjectStore {
     throw new Error("Drawing not found or project is not open");
   }
 
+  private findContextByAiCandidate(id: string): ProjectContext {
+    for (const context of this.contexts.values()) {
+      const row = context.db.prepare("SELECT id FROM ai_candidates WHERE id = ?").get(id);
+      if (row) {
+        return context;
+      }
+    }
+    throw new Error("AI candidate not found or project is not open");
+  }
+
+  private findContextByPlayer(id: string): ProjectContext {
+    for (const context of this.contexts.values()) {
+      const row = context.db.prepare("SELECT id FROM players WHERE id = ?").get(id);
+      if (row) {
+        return context;
+      }
+    }
+    throw new Error("Player not found or project is not open");
+  }
+
   private requireContext(projectId: string): ProjectContext {
     const context = this.contexts.get(projectId);
     if (!context) {
@@ -1044,6 +1509,123 @@ export class ProjectStore {
       .prepare("SELECT * FROM export_jobs WHERE project_id = ? ORDER BY created_at DESC")
       .all(projectId) as ExportJobRow[];
     return rows.map(exportJobFromRow);
+  }
+
+  private listPlayersFromDb(db: DatabaseSync, projectId: string): Player[] {
+    const rows = db.prepare("SELECT * FROM players WHERE project_id = ? ORDER BY name").all(projectId) as PlayerRow[];
+    return rows.map(playerFromRow);
+  }
+
+  private listTrainingTopicsFromDb(db: DatabaseSync, projectId: string): TrainingTopic[] {
+    const rows = db
+      .prepare("SELECT * FROM training_topics WHERE project_id = ? ORDER BY priority, created_at DESC")
+      .all(projectId) as TrainingTopicRow[];
+    return rows.map(trainingTopicFromRow);
+  }
+
+  private listAiCandidatesFromDb(db: DatabaseSync, projectId: string): AiCandidate[] {
+    const rows = db
+      .prepare("SELECT * FROM ai_candidates WHERE project_id = ? ORDER BY status, confidence DESC, start_ms")
+      .all(projectId) as AiCandidateRow[];
+    return rows.map(aiCandidateFromRow);
+  }
+
+  private getAiCandidateById(db: DatabaseSync, id: string): AiCandidate | null {
+    const row = db.prepare("SELECT * FROM ai_candidates WHERE id = ?").get(id) as AiCandidateRow | undefined;
+    return row ? aiCandidateFromRow(row) : null;
+  }
+
+  private getPlayerById(db: DatabaseSync, id: string): Player | null {
+    const row = db.prepare("SELECT * FROM players WHERE id = ?").get(id) as PlayerRow | undefined;
+    return row ? playerFromRow(row) : null;
+  }
+
+  private ensurePlayersFromEvents(db: DatabaseSync, projectId: string): Player[] {
+    const events = this.listEventsFromDb(db, projectId);
+    for (const event of events) {
+      if (event.playerName?.trim()) {
+        const player = this.upsertPlayer(db, projectId, event.playerName.trim(), {});
+        db.prepare("INSERT OR IGNORE INTO event_player_links (event_id, player_id, role) VALUES (?, ?, ?)")
+          .run(event.id, player.id, "primary");
+      }
+    }
+    return this.listPlayersFromDb(db, projectId);
+  }
+
+  private upsertPlayer(
+    db: DatabaseSync,
+    projectId: string,
+    name: string,
+    patch: Partial<CreatePlayerInput>,
+  ): Player {
+    const cleanName = name.trim() || "未命名球员";
+    const existing = db.prepare("SELECT * FROM players WHERE project_id = ? AND name = ?").get(projectId, cleanName) as
+      | PlayerRow
+      | undefined;
+    const now = new Date().toISOString();
+    if (existing) {
+      const player = { ...playerFromRow(existing), ...patch, name: cleanName, updatedAt: now };
+      db.prepare(
+        `UPDATE players SET number = ?, position = ?, strengths = ?, improvements = ?, coach_note = ?, updated_at = ? WHERE id = ?`,
+      ).run(
+        player.number ?? null,
+        player.position ?? null,
+        player.strengths ?? null,
+        player.improvements ?? null,
+        player.coachNote ?? null,
+        player.updatedAt,
+        player.id,
+      );
+      return player;
+    }
+
+    const player: Player = {
+      id: randomUUID(),
+      projectId,
+      name: cleanName,
+      number: patch.number,
+      position: patch.position,
+      strengths: patch.strengths,
+      improvements: patch.improvements,
+      coachNote: patch.coachNote,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.prepare(
+      `INSERT INTO players (
+        id, project_id, name, number, position, strengths, improvements, coach_note, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      player.id,
+      player.projectId,
+      player.name,
+      player.number ?? null,
+      player.position ?? null,
+      player.strengths ?? null,
+      player.improvements ?? null,
+      player.coachNote ?? null,
+      player.createdAt,
+      player.updatedAt,
+    );
+    return player;
+  }
+
+  private insertTrainingTopic(db: DatabaseSync, topic: TrainingTopic): void {
+    db.prepare(
+      `INSERT INTO training_topics (
+        id, project_id, title, phase, priority, evidence_event_ids_json, recommendation, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      topic.id,
+      topic.projectId,
+      topic.title,
+      topic.phase ?? null,
+      topic.priority,
+      JSON.stringify(topic.evidenceEventIds),
+      topic.recommendation,
+      topic.createdAt,
+      topic.updatedAt,
+    );
   }
 
   private createExportJob(
@@ -1284,6 +1866,320 @@ function exportJobFromRow(row: ExportJobRow): ExportJob {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function playerFromRow(row: PlayerRow): Player {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    number: row.number ?? undefined,
+    position: row.position ?? undefined,
+    strengths: row.strengths ?? undefined,
+    improvements: row.improvements ?? undefined,
+    coachNote: row.coach_note ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function trainingTopicFromRow(row: TrainingTopicRow): TrainingTopic {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    phase: row.phase ?? undefined,
+    priority: row.priority,
+    evidenceEventIds: parseStringArray(row.evidence_event_ids_json),
+    recommendation: row.recommendation,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function aiCandidateFromRow(row: AiCandidateRow): AiCandidate {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    mediaId: row.media_id,
+    startMs: row.start_ms,
+    endMs: row.end_ms,
+    eventType: row.event_type,
+    phase: row.phase ?? undefined,
+    confidence: row.confidence,
+    reason: row.reason,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function coachingPointForPhase(phase: MatchEvent["phase"], events: MatchEvent[]): string {
+  if (events.length === 0) {
+    return "No coded clips yet. Add several examples before building the review message.";
+  }
+
+  const failed = events.filter((event) => /fail|lost|miss|concede|失|丢|未|被/i.test(`${event.result ?? ""} ${event.eventType}`));
+  const rate = Math.round((failed.length / events.length) * 100);
+  if (phase === "attack") {
+    return failed.length > 0 ? `Attack has ${rate}% lower-quality clips; review entry timing and final action choices.` : "Attack clips are stable; select the clearest patterns for the team meeting.";
+  }
+  if (phase === "defense") {
+    return failed.length > 0 ? `Defense needs attention in ${failed.length} clips; focus on pressure distance and cover balance.` : "Defensive clips are ready for positive reinforcement and shape review.";
+  }
+  if (phase === "transition") {
+    return "Use these clips to separate first three seconds after regain/loss and assign immediate reactions.";
+  }
+  return "Compare set-piece delivery, first contact, and second-ball positions across these clips.";
+}
+
+function playerReportsFromEvents(events: MatchEvent[]): ReviewSummary["playerReports"] {
+  const byPlayer = new Map<string, MatchEvent[]>();
+  for (const event of events) {
+    const name = event.playerName?.trim();
+    if (!name) {
+      continue;
+    }
+    byPlayer.set(name, [...(byPlayer.get(name) ?? []), event]);
+  }
+
+  return [...byPlayer.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 12)
+    .map(([playerName, playerEvents]) => ({
+      playerName,
+      eventCount: playerEvents.length,
+      keyEventIds: playerEvents.slice(0, 6).map((event) => event.id),
+      feedback: buildPlayerFeedback(playerEvents),
+    }));
+}
+
+function buildPlayerFeedback(events: MatchEvent[]): string {
+  const good = events.filter((event) => event.quality === "excellent" || event.quality === "good").length;
+  const needsWork = events.filter((event) => event.quality === "needs_work").length;
+  if (needsWork > good) {
+    return "Prioritize two teachable clips and give one concrete correction for the next training session.";
+  }
+  if (good > 0) {
+    return "Use the best clips as positive examples, then add one next-step detail.";
+  }
+  return "Tag strengths and improvement notes after watching these clips.";
+}
+
+export function buildTrainingTopics(projectId: string, events: MatchEvent[]): TrainingTopic[] {
+  const now = new Date().toISOString();
+  const topicSpecs: Array<{
+    title: string;
+    phase: MatchEvent["phase"];
+    priority: TrainingTopic["priority"];
+    keywords: string[];
+    fallback: string;
+  }> = [
+    {
+      title: "Final-third decision making",
+      phase: "attack",
+      priority: "high",
+      keywords: ["shot", "cross", "final", "射门", "传中", "进攻三区"],
+      fallback: "Run 4v3/5v4 final-third games and require the ball carrier to choose shoot, cross, or reset within three seconds.",
+    },
+    {
+      title: "Defensive pressure and cover",
+      phase: "defense",
+      priority: "high",
+      keywords: ["bypassed", "conceded", "press", "被突破", "丢球", "压迫"],
+      fallback: "Train first defender pressure distance, second defender cover angle, and back-line communication.",
+    },
+    {
+      title: "Transition first three seconds",
+      phase: "transition",
+      priority: "medium",
+      keywords: ["transition", "counter", "regain", "转换", "反击", "抢断"],
+      fallback: "Use regain/loss games with a three-second rule to lock immediate support and counterpress reactions.",
+    },
+    {
+      title: "Set-piece first contact",
+      phase: "set_piece",
+      priority: "medium",
+      keywords: ["corner", "free", "throw", "set_piece", "角球", "任意球", "定位球"],
+      fallback: "Rehearse delivery zones, blockers, first contact, and second-ball recovery positions.",
+    },
+  ];
+
+  return topicSpecs
+    .map((spec) => {
+      const evidence = events
+        .filter((event) => event.phase === spec.phase || spec.keywords.some((key) => event.eventType.toLowerCase().includes(key.toLowerCase())))
+        .slice(0, 8);
+      return {
+        id: randomUUID(),
+        projectId,
+        title: spec.title,
+        phase: spec.phase,
+        priority: evidence.length >= 4 ? spec.priority : "low",
+        evidenceEventIds: evidence.map((event) => event.id),
+        recommendation: evidence.length > 0 ? spec.fallback : `${spec.fallback} Add more coded examples to sharpen this topic.`,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies TrainingTopic;
+    })
+    .filter((topic) => topic.evidenceEventIds.length > 0);
+}
+
+export function buildAiSuggestions(projectId: string, mediaId: string, events: MatchEvent[], durationMs: number): AiCandidate[] {
+  const now = new Date().toISOString();
+  const suggestions: AiCandidate[] = [];
+  const occupied = (startMs: number, endMs: number) =>
+    events.some((event) => Math.max(event.startMs, startMs) < Math.min(event.endMs, endMs));
+  const pushCandidate = (
+    startMs: number,
+    endMs: number,
+    eventType: string,
+    phase: MatchEvent["phase"],
+    confidence: number,
+    reason: string,
+  ) => {
+    const range = normalizeEventRange(startMs, endMs, startMs, 10_000);
+    if ((durationMs > 0 && range.startMs >= durationMs) || occupied(range.startMs, range.endMs)) {
+      return;
+    }
+    suggestions.push({
+      id: randomUUID(),
+      projectId,
+      mediaId,
+      startMs: range.startMs,
+      endMs: Math.min(durationMs || range.endMs, range.endMs),
+      eventType,
+      phase,
+      confidence,
+      reason,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  const safeDuration = durationMs > 0 ? durationMs : 90 * 60 * 1000;
+  for (let startMs = 0; startMs < safeDuration; startMs += 10 * 60 * 1000) {
+    pushCandidate(startMs + 90_000, startMs + 108_000, "possible_attack_sequence", "attack", 0.58, "Regular review marker: sample one long possession window in this match segment.");
+    pushCandidate(startMs + 300_000, startMs + 314_000, "possible_transition", "transition", 0.52, "Regular review marker: check the first actions after a possession change.");
+  }
+
+  for (const event of events) {
+    if (/shot|cross|射门|传中/i.test(event.eventType)) {
+      pushCandidate(event.startMs - 12_000, event.startMs - 2_000, "build_up_before_final_action", "attack", 0.66, "Existing final-action code suggests the buildup before it may be useful.");
+    }
+    if (/corner|free|set_piece|角球|任意球|定位球/i.test(event.eventType)) {
+      pushCandidate(event.startMs, event.endMs + 8_000, "set_piece_second_ball", "set_piece", 0.64, "Existing set-piece code suggests checking the second-ball phase.");
+    }
+  }
+
+  return suggestions.slice(0, 24);
+}
+
+export function previewMigrationFile(sourcePath: string): MigrationPreview {
+  const ext = extname(sourcePath).toLowerCase();
+  const warnings: string[] = [];
+  if (ext === ".json") {
+    const parsed = JSON.parse(readFileSync(sourcePath, "utf8")) as Partial<CodingTemplate>;
+    const fields = ["id", "name", "groups", "buttons"].filter((field) => Object.hasOwn(parsed, field));
+    return {
+      sourcePath,
+      kind: "template_json",
+      detectedFields: fields,
+      rowCount: parsed.groups?.reduce((sum, group) => sum + group.buttons.length, 0) ?? 0,
+      mapping: { groups: "template.groups", buttons: "template.groups.buttons" },
+      warnings,
+    };
+  }
+
+  const text = readFileSync(sourcePath, "utf8").replace(/^\uFEFF/, "");
+  if (ext === ".csv") {
+    const rows = parseCsv(text);
+    const headers = rows[0] ?? [];
+    const normalized = headers.map(normalizeHeader);
+    return {
+      sourcePath,
+      kind: "csv",
+      detectedFields: headers,
+      rowCount: Math.max(0, rows.length - 1),
+      mapping: defaultMigrationMapping(normalized),
+      warnings: normalized.includes("start") || normalized.includes("start_time") ? warnings : ["No obvious start-time field detected."],
+    };
+  }
+
+  if (ext === ".xml") {
+    const records = parseXmlEvents(text);
+    const fields = Array.from(new Set(records.flatMap((record) => Object.keys(record))));
+    return {
+      sourcePath,
+      kind: "xml",
+      detectedFields: fields,
+      rowCount: records.length,
+      mapping: defaultMigrationMapping(fields.map(normalizeHeader)),
+      warnings: records.length === 0 ? ["No event-like XML records detected."] : warnings,
+    };
+  }
+
+  return {
+    sourcePath,
+    kind: "unknown",
+    detectedFields: [],
+    rowCount: 0,
+    mapping: {},
+    warnings: ["Unsupported migration file type."],
+  };
+}
+
+function defaultMigrationMapping(fields: string[]): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  const pairs: Array<[string, string[]]> = [
+    ["startMs", ["start", "start_time", "start_ms", "in", "开始", "开始时间"]],
+    ["endMs", ["end", "end_time", "end_ms", "out", "结束", "结束时间"]],
+    ["eventType", ["event_type", "type", "event", "code", "name", "事件", "事件类型"]],
+    ["phase", ["phase", "stage", "阶段"]],
+    ["playerName", ["player", "player_name", "athlete", "球员"]],
+    ["result", ["result", "outcome", "结果"]],
+    ["tags", ["tags", "labels", "标签"]],
+  ];
+  for (const [target, keys] of pairs) {
+    const match = fields.find((field) => keys.map(normalizeHeader).includes(field));
+    if (match) {
+      mapping[target] = match;
+    }
+  }
+  return mapping;
+}
+
+function parseXmlEvents(xml: string): Array<Record<string, string>> {
+  const records: Array<Record<string, string>> = [];
+  const instancePattern = /<(?:instance|event|row)\b[^>]*>([\s\S]*?)<\/(?:instance|event|row)>/gi;
+  for (const match of xml.matchAll(instancePattern)) {
+    const block = match[1];
+    const record: Record<string, string> = {};
+    for (const tag of block.matchAll(/<([A-Za-z_][\w:-]*)\b[^>]*>([\s\S]*?)<\/\1>/g)) {
+      const key = tag[1].split(":").pop() ?? tag[1];
+      record[normalizeHeader(key)] = stripXml(tag[2]);
+    }
+    if (Object.keys(record).length > 0) {
+      records.push({
+      start: firstValue(record, ["start", "start_time", "in", "code_start"]) ?? "",
+      end: firstValue(record, ["end", "end_time", "out", "code_end"]) ?? "",
+      name: firstValue(record, ["event_type", "name", "code", "label", "type"]) ?? "Imported XML Event",
+      event_type: firstValue(record, ["event_type", "name", "code", "label", "type"]) ?? "Imported XML Event",
+        phase: firstValue(record, ["phase", "stage"]) ?? "",
+        player: firstValue(record, ["player", "player_name", "athlete"]) ?? "",
+        result: firstValue(record, ["result", "outcome"]) ?? "",
+        note: firstValue(record, ["note", "comment", "text"]) ?? "",
+        tags: firstValue(record, ["tags", "labels"]) ?? "",
+        ...record,
+      });
+    }
+  }
+  return records;
+}
+
+function stripXml(value: string): string {
+  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
 export function buildFfmpegArgs(

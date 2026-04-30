@@ -1,9 +1,12 @@
 import {
   Bookmark,
+  Brain,
   ChevronDown,
   Circle,
+  ClipboardList,
   Download,
   FastForward,
+  FileJson,
   FileVideo,
   FolderOpen,
   Import,
@@ -24,11 +27,14 @@ import {
   Undo2,
   Upload,
   Wand2,
+  Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useProject } from "../../app/ProjectContext";
 import type {
   CodingButton,
+  CodingTemplate,
+  AiCandidate,
   Drawing,
   DrawingLayer,
   DrawingTool,
@@ -36,8 +42,13 @@ import type {
   MatchEvent,
   MatchPhase,
   Playlist,
+  Player,
   RecentProject,
+  ReviewSummary,
+  TrainingTopic,
   UpdateEventInput,
+  UpdatePlayerInput,
+  MigrationPreview,
 } from "../../../shared/domain";
 import { clampTimeMs, formatTimecode, normalizeEventRange } from "../../../shared/time";
 
@@ -66,6 +77,11 @@ export function AnalysisWorkspace() {
     playlists,
     drawings,
     exportJobs,
+    players,
+    trainingTopics,
+    aiCandidates,
+    reviewSummary,
+    migrationPreview,
     recentProjects,
     selectedEventId,
     selectedMediaId,
@@ -78,18 +94,31 @@ export function AnalysisWorkspace() {
     openRecentProject,
     importPrimaryVideo,
     importCsvEvents,
+    previewMigration,
+    commitMigration,
     createMatchEvent,
     updateMatchEvent,
     deleteMatchEvent,
+    saveTemplate,
+    importTemplate,
     createPlaylist,
     addEventToPlaylist,
     removePlaylistItem,
     saveCurrentDrawing,
     deleteDrawing,
+    generateReview,
+    generateAiCandidates,
+    confirmAiCandidate,
+    ignoreAiCandidate,
+    createPlayer,
+    updatePlayer,
+    generateTrainingTopics,
+    createTrainingTopic,
     exportCsv,
     exportHtml,
     exportVideo,
     exportPlaylistVideo,
+    exportBackup,
     selectEvent,
     selectPlaylist,
     clearError,
@@ -103,7 +132,9 @@ export function AnalysisWorkspace() {
   const [markInMs, setMarkInMs] = useState<number | null>(null);
   const [markOutMs, setMarkOutMs] = useState<number | null>(null);
   const [filterPhase, setFilterPhase] = useState<MatchPhase | "all">("all");
-  const [rightTab, setRightTab] = useState<"detail" | "events" | "filters" | "playlist">("detail");
+  const [rightTab, setRightTab] = useState<
+    "detail" | "events" | "filters" | "playlist" | "review" | "ai" | "players" | "training" | "template" | "migration"
+  >("detail");
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [drawingTool, setDrawingTool] = useState<DrawingTool | "select">("select");
   const [draftLayers, setDraftLayers] = useState<DrawingLayer[]>([]);
@@ -447,8 +478,8 @@ export function AnalysisWorkspace() {
               <span>AI候选</span>
               <Wand2 size={14} />
             </div>
-            <button className="wide-disabled" type="button" disabled>
-              后续版本接入
+            <button className="wide-disabled" type="button" disabled={!project || !selectedMedia} onClick={() => setRightTab("ai")}>
+              生成并确认候选片段
             </button>
           </section>
         </aside>
@@ -689,8 +720,13 @@ export function AnalysisWorkspace() {
             {[
               ["detail", "事件详情"],
               ["events", "事件列表"],
-              ["filters", "筛选"],
               ["playlist", "片段集"],
+              ["review", "复盘"],
+              ["ai", "AI"],
+              ["players", "球员"],
+              ["training", "训练"],
+              ["template", "模板"],
+              ["migration", "迁移"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -736,6 +772,64 @@ export function AnalysisWorkspace() {
               onExportCsv={(playlistId) => void exportCsv(playlistId)}
               onExportHtml={(playlistId) => void exportHtml(playlistId)}
               onExportPlaylistVideo={(playlistId) => void exportPlaylistVideo(playlistId)}
+            />
+          ) : null}
+          {rightTab === "review" ? (
+            <ReviewPanel
+              summary={reviewSummary}
+              trainingTopics={trainingTopics}
+              eventById={new Map(events.map((event) => [event.id, event]))}
+              onGenerate={() => void generateReview()}
+            />
+          ) : null}
+          {rightTab === "ai" ? (
+            <AiCandidatePanel
+              candidates={aiCandidates}
+              onGenerate={() => void generateAiCandidates()}
+              onConfirm={(id) => void confirmAiCandidate(id)}
+              onIgnore={(id) => void ignoreAiCandidate(id)}
+              onSeek={(candidate) => seekTo(candidate.startMs)}
+            />
+          ) : null}
+          {rightTab === "players" ? (
+            <PlayersPanel
+              projectId={project?.id}
+              players={players}
+              events={events}
+              onCreate={(name) => project && void createPlayer({ projectId: project.id, name })}
+              onUpdate={(id, patch) => void updatePlayer(id, patch)}
+            />
+          ) : null}
+          {rightTab === "training" ? (
+            <TrainingPanel
+              projectId={project?.id}
+              topics={trainingTopics}
+              onGenerate={() => void generateTrainingTopics()}
+              onCreate={(title) =>
+                project &&
+                void createTrainingTopic({
+                  projectId: project.id,
+                  title,
+                  priority: "medium",
+                  recommendation: "Add three representative clips and turn them into a training exercise.",
+                })
+              }
+            />
+          ) : null}
+          {rightTab === "template" ? (
+            <TemplateEditorPanel
+              key={activeTemplate?.id ?? "empty-template"}
+              template={activeTemplate}
+              onSave={(template) => void saveTemplate(template)}
+              onImport={() => void importTemplate()}
+            />
+          ) : null}
+          {rightTab === "migration" ? (
+            <MigrationPanel
+              preview={migrationPreview}
+              onPreview={() => void previewMigration()}
+              onCommit={() => void commitMigration()}
+              onExportBackup={() => void exportBackup()}
             />
           ) : null}
         </aside>
@@ -1136,6 +1230,304 @@ function PlaylistPanel({
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ReviewPanel({
+  summary,
+  trainingTopics,
+  eventById,
+  onGenerate,
+}: {
+  summary: ReviewSummary | null;
+  trainingTopics: TrainingTopic[];
+  eventById: Map<string, MatchEvent>;
+  onGenerate: () => void;
+}) {
+  return (
+    <div className="inspector-stack">
+      <button className="wide-action" type="button" onClick={onGenerate}>
+        <ClipboardList size={15} />
+        生成一键复盘
+      </button>
+      {summary ? (
+        <>
+          <div className="metric-grid">
+            {summary.phaseCards.map((card) => (
+              <div className="metric-card" key={card.phase}>
+                <span>{card.label}</span>
+                <strong>{card.count}</strong>
+                <small>{card.coachingPoint}</small>
+              </div>
+            ))}
+          </div>
+          <section className="compact-section">
+            <h3>教练会片段集</h3>
+            <span>{summary.coachPlaylistName}</span>
+          </section>
+          <section className="compact-section">
+            <h3>球员反馈</h3>
+            {summary.playerReports.length === 0 ? <span className="subtle">给事件填写球员后会自动生成个人反馈。</span> : null}
+            {summary.playerReports.map((report) => (
+              <div className="mini-row" key={report.playerName}>
+                <strong>{report.playerName}</strong>
+                <span>{report.eventCount} clips / {report.feedback}</span>
+              </div>
+            ))}
+          </section>
+        </>
+      ) : (
+        <M3Placeholder title="赛后复盘中心" icon={<ClipboardList size={18} />} />
+      )}
+      <section className="compact-section">
+        <h3>训练主题</h3>
+        {trainingTopics.slice(0, 4).map((topic) => (
+          <div className="mini-row" key={topic.id}>
+            <strong>{topic.title}</strong>
+            <span>
+              {topic.priority} / {topic.evidenceEventIds.map((id) => eventById.get(id)?.eventType).filter(Boolean).slice(0, 2).join(", ")}
+            </span>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function AiCandidatePanel({
+  candidates,
+  onGenerate,
+  onConfirm,
+  onIgnore,
+  onSeek,
+}: {
+  candidates: AiCandidate[];
+  onGenerate: () => void;
+  onConfirm: (id: string) => void;
+  onIgnore: (id: string) => void;
+  onSeek: (candidate: AiCandidate) => void;
+}) {
+  const pending = candidates.filter((candidate) => candidate.status === "pending");
+  return (
+    <div className="inspector-stack">
+      <button className="wide-action" type="button" onClick={onGenerate}>
+        <Brain size={15} />
+        生成 AI 候选
+      </button>
+      <span className="subtle">AI v1 只给可解释候选，确认后才写入正式时间线。</span>
+      <div className="candidate-list">
+        {pending.map((candidate) => (
+          <article className="candidate-card" key={candidate.id}>
+            <button type="button" onClick={() => onSeek(candidate)}>
+              <strong>{candidate.eventType}</strong>
+              <span>{formatTimecode(candidate.startMs, true)} - {formatTimecode(candidate.endMs, true)}</span>
+            </button>
+            <p>{Math.round(candidate.confidence * 100)}% / {candidate.reason}</p>
+            <div>
+              <button type="button" onClick={() => onConfirm(candidate.id)}>确认</button>
+              <button type="button" onClick={() => onIgnore(candidate.id)}>忽略</button>
+            </div>
+          </article>
+        ))}
+        {pending.length === 0 ? <span className="subtle">暂无待确认候选。</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function PlayersPanel({
+  projectId,
+  players,
+  events,
+  onCreate,
+  onUpdate,
+}: {
+  projectId?: string;
+  players: Player[];
+  events: MatchEvent[];
+  onCreate: (name: string) => void;
+  onUpdate: (id: string, patch: UpdatePlayerInput) => void;
+}) {
+  const [name, setName] = useState("");
+  const eventCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const event of events) {
+      if (event.playerName) {
+        counts.set(event.playerName, (counts.get(event.playerName) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [events]);
+
+  return (
+    <div className="inspector-stack">
+      <div className="inline-create">
+        <input value={name} placeholder="球员姓名或号码" onChange={(event) => setName(event.target.value)} />
+        <button
+          type="button"
+          disabled={!projectId || !name.trim()}
+          onClick={() => {
+            onCreate(name);
+            setName("");
+          }}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      {players.map((player) => (
+        <article className="player-card" key={player.id}>
+          <div>
+            <strong>{player.number ? `${player.number} ` : ""}{player.name}</strong>
+            <span>{player.position ?? "未设置位置"} / {eventCounts.get(player.name) ?? 0} clips</span>
+          </div>
+          <input value={player.position ?? ""} placeholder="位置" onChange={(event) => onUpdate(player.id, { position: event.target.value })} />
+          <textarea value={player.coachNote ?? ""} placeholder="教练备注" rows={2} onChange={(event) => onUpdate(player.id, { coachNote: event.target.value })} />
+        </article>
+      ))}
+      {players.length === 0 ? <M3Placeholder title="球员报告" icon={<Users size={18} />} /> : null}
+    </div>
+  );
+}
+
+function TrainingPanel({
+  projectId,
+  topics,
+  onGenerate,
+  onCreate,
+}: {
+  projectId?: string;
+  topics: TrainingTopic[];
+  onGenerate: () => void;
+  onCreate: (title: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  return (
+    <div className="inspector-stack">
+      <button className="wide-action" type="button" onClick={onGenerate}>
+        <ClipboardList size={15} />
+        从事件生成训练主题
+      </button>
+      <div className="inline-create">
+        <input value={title} placeholder="手动添加训练主题" onChange={(event) => setTitle(event.target.value)} />
+        <button
+          type="button"
+          disabled={!projectId || !title.trim()}
+          onClick={() => {
+            onCreate(title);
+            setTitle("");
+          }}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      {topics.map((topic) => (
+        <article className="topic-card" key={topic.id}>
+          <strong>{topic.title}</strong>
+          <span>{topic.priority} / {topic.phase ? phaseLabels[topic.phase] : "通用"} / {topic.evidenceEventIds.length} clips</span>
+          <p>{topic.recommendation}</p>
+        </article>
+      ))}
+      {topics.length === 0 ? <span className="subtle">编码几段关键事件后，可自动形成训练主题清单。</span> : null}
+    </div>
+  );
+}
+
+function TemplateEditorPanel({
+  template,
+  onSave,
+  onImport,
+}: {
+  template?: CodingTemplate;
+  onSave: (template: CodingTemplate) => void;
+  onImport: () => void;
+}) {
+  const [draft, setDraft] = useState<CodingTemplate | null>(template ?? null);
+
+  if (!draft) {
+    return <M3Placeholder title="Coding 模板" icon={<FileJson size={18} />} />;
+  }
+
+  const updateButton = (buttonId: string, patch: Partial<CodingButton>) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            groups: current.groups.map((group) => ({
+              ...group,
+              buttons: group.buttons.map((button) => (button.id === buttonId ? { ...button, ...patch } : button)),
+            })),
+          }
+        : current,
+    );
+  };
+
+  return (
+    <div className="inspector-stack">
+      <div className="playlist-actions">
+        <button type="button" onClick={() => onImport()}>
+          <Import size={15} />
+          导入模板
+        </button>
+        <button type="button" onClick={() => onSave({ ...draft, updatedAt: new Date().toISOString() })}>
+          <Save size={15} />
+          保存模板
+        </button>
+      </div>
+      {draft.groups.map((group) => (
+        <section className="template-edit-group" key={group.id}>
+          <h3>{group.name}</h3>
+          {group.buttons.map((button) => (
+            <div className="template-edit-row" key={button.id}>
+              <input value={button.label} onChange={(event) => updateButton(button.id, { label: event.target.value })} />
+              <input value={button.hotkey ?? ""} maxLength={2} onChange={(event) => updateButton(button.id, { hotkey: event.target.value })} />
+              <input
+                type="number"
+                min={1}
+                value={(button.defaultDurationMs ?? 10_000) / 1000}
+                onChange={(event) => updateButton(button.id, { defaultDurationMs: Math.max(1, Number(event.target.value)) * 1000 })}
+              />
+            </div>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function MigrationPanel({
+  preview,
+  onPreview,
+  onCommit,
+  onExportBackup,
+}: {
+  preview: MigrationPreview | null;
+  onPreview: () => void;
+  onCommit: () => void;
+  onExportBackup: () => void;
+}) {
+  return (
+    <div className="inspector-stack">
+      <button className="wide-action" type="button" onClick={onPreview}>
+        <Import size={15} />
+        预览 CSV/XML/模板
+      </button>
+      <button className="wide-action" type="button" onClick={onExportBackup}>
+        <Download size={15} />
+        导出项目备份
+      </button>
+      {preview ? (
+        <article className="migration-card">
+          <strong>{preview.kind.toUpperCase()} / {preview.rowCount} rows</strong>
+          <span title={preview.sourcePath}>{preview.sourcePath}</span>
+          <p>字段：{preview.detectedFields.slice(0, 8).join(", ") || "未识别"}</p>
+          <p>映射：{Object.entries(preview.mapping).map(([key, value]) => `${key}=${value}`).join(", ") || "无"}</p>
+          {preview.warnings.map((warning) => <small key={warning}>{warning}</small>)}
+          <button type="button" disabled={preview.kind === "unknown"} onClick={onCommit}>确认导入</button>
+        </article>
+      ) : (
+        <span className="subtle">迁移向导会先展示字段与映射，确认后才写入项目。</span>
+      )}
     </div>
   );
 }

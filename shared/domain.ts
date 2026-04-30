@@ -146,6 +146,74 @@ export type PlaylistItem = {
   postRollMs: number;
 };
 
+export type Player = {
+  id: string;
+  projectId: string;
+  name: string;
+  number?: string;
+  position?: string;
+  strengths?: string;
+  improvements?: string;
+  coachNote?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EventPlayerLink = {
+  eventId: string;
+  playerId: string;
+  role: "primary" | "secondary" | "mentioned";
+};
+
+export type TrainingTopic = {
+  id: string;
+  projectId: string;
+  title: string;
+  phase?: MatchPhase;
+  priority: "high" | "medium" | "low";
+  evidenceEventIds: string[];
+  recommendation: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AiCandidateStatus = "pending" | "confirmed" | "ignored";
+
+export type AiCandidate = {
+  id: string;
+  projectId: string;
+  mediaId: string;
+  startMs: number;
+  endMs: number;
+  eventType: string;
+  phase?: MatchPhase;
+  confidence: number;
+  reason: string;
+  status: AiCandidateStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReviewSummary = {
+  projectId: string;
+  generatedAt: string;
+  phaseCards: Array<{
+    phase: MatchPhase;
+    label: string;
+    count: number;
+    keyEventIds: string[];
+    coachingPoint: string;
+  }>;
+  coachPlaylistName: string;
+  playerReports: Array<{
+    playerName: string;
+    eventCount: number;
+    keyEventIds: string[];
+    feedback: string;
+  }>;
+  trainingTopics: TrainingTopic[];
+};
+
 export type DrawingTool = "arrow" | "line" | "zone" | "label";
 
 export type Drawing = {
@@ -209,6 +277,9 @@ export type ProjectOpenResult = {
   playlists: Playlist[];
   drawings: Drawing[];
   exportJobs: ExportJob[];
+  players: Player[];
+  trainingTopics: TrainingTopic[];
+  aiCandidates: AiCandidate[];
 };
 
 export type ImportVideoInput = {
@@ -303,6 +374,49 @@ export type ExportPlaylistVideoInput = {
   playlistId: string;
   format?: "mp4" | "mov" | "webm";
   includeOverlay?: boolean;
+};
+
+export type SaveTemplateInput = {
+  projectId: string;
+  template: CodingTemplate;
+};
+
+export type CreatePlayerInput = {
+  projectId: string;
+  name: string;
+  number?: string;
+  position?: string;
+  strengths?: string;
+  improvements?: string;
+  coachNote?: string;
+};
+
+export type UpdatePlayerInput = Partial<Omit<CreatePlayerInput, "projectId">>;
+
+export type CreateTrainingTopicInput = {
+  projectId: string;
+  title: string;
+  phase?: MatchPhase;
+  priority: TrainingTopic["priority"];
+  evidenceEventIds?: string[];
+  recommendation: string;
+};
+
+export type MigrationPreview = {
+  sourcePath: string;
+  kind: "csv" | "xml" | "template_json" | "unknown";
+  detectedFields: string[];
+  rowCount: number;
+  mapping: Record<string, string>;
+  warnings: string[];
+};
+
+export type CommitMigrationInput = {
+  projectId: string;
+  mediaId?: string;
+  sourcePath: string;
+  kind: MigrationPreview["kind"];
+  mapping?: Record<string, string>;
 };
 
 export type ImportResult = {

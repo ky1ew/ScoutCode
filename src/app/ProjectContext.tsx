@@ -2,19 +2,27 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { createDefaultFootballTemplate } from "../../shared/defaultTemplate";
 import type {
   AddEventToPlaylistInput,
+  AiCandidate,
   CodingTemplate,
   CreateEventInput,
+  CreatePlayerInput,
+  CreateTrainingTopicInput,
   Drawing,
   DrawingLayer,
   ExportJob,
   MatchEvent,
   MediaAsset,
+  MigrationPreview,
   Playlist,
   PlaylistPurpose,
+  Player,
   Project,
   ProjectOpenResult,
   RecentProject,
+  ReviewSummary,
+  TrainingTopic,
   UpdateEventInput,
+  UpdatePlayerInput,
 } from "../../shared/domain";
 
 type ProjectState = {
@@ -26,6 +34,11 @@ type ProjectState = {
   playlists: Playlist[];
   drawings: Drawing[];
   exportJobs: ExportJob[];
+  players: Player[];
+  trainingTopics: TrainingTopic[];
+  aiCandidates: AiCandidate[];
+  reviewSummary: ReviewSummary | null;
+  migrationPreview: MigrationPreview | null;
   recentProjects: RecentProject[];
   selectedEventId: string | null;
   selectedMediaId: string | null;
@@ -39,18 +52,31 @@ type ProjectState = {
   openRecentProject(projectPath: string): Promise<void>;
   importPrimaryVideo(storageMode: "copy" | "link"): Promise<void>;
   importCsvEvents(): Promise<void>;
+  previewMigration(): Promise<void>;
+  commitMigration(): Promise<void>;
   createMatchEvent(input: CreateEventInput): Promise<MatchEvent | null>;
   updateMatchEvent(id: string, patch: UpdateEventInput): Promise<void>;
   deleteMatchEvent(id: string): Promise<void>;
+  saveTemplate(template: CodingTemplate): Promise<void>;
+  importTemplate(): Promise<void>;
   createPlaylist(name: string, purpose: PlaylistPurpose): Promise<Playlist | null>;
   addEventToPlaylist(input: AddEventToPlaylistInput): Promise<void>;
   removePlaylistItem(itemId: string): Promise<void>;
   saveCurrentDrawing(input: { eventId?: string; mediaId: string; timeMs: number; layers: DrawingLayer[] }): Promise<void>;
   deleteDrawing(id: string): Promise<void>;
+  generateReview(): Promise<void>;
+  generateAiCandidates(): Promise<void>;
+  confirmAiCandidate(id: string): Promise<void>;
+  ignoreAiCandidate(id: string): Promise<void>;
+  createPlayer(input: CreatePlayerInput): Promise<void>;
+  updatePlayer(id: string, patch: UpdatePlayerInput): Promise<void>;
+  generateTrainingTopics(): Promise<void>;
+  createTrainingTopic(input: CreateTrainingTopicInput): Promise<void>;
   exportCsv(playlistId?: string): Promise<void>;
   exportHtml(playlistId?: string): Promise<void>;
   exportVideo(eventId: string): Promise<void>;
   exportPlaylistVideo(playlistId: string): Promise<void>;
+  exportBackup(): Promise<void>;
   selectEvent(id: string | null): void;
   selectPlaylist(id: string | null): void;
   clearError(): void;
@@ -82,6 +108,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [trainingTopics, setTrainingTopics] = useState<TrainingTopic[]>([]);
+  const [aiCandidates, setAiCandidates] = useState<AiCandidate[]>([]);
+  const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
+  const [migrationPreview, setMigrationPreview] = useState<MigrationPreview | null>(null);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
@@ -111,6 +142,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       setPlaylists(result.playlists);
       setDrawings(result.drawings);
       setExportJobs(result.exportJobs);
+      setPlayers(result.players);
+      setTrainingTopics(result.trainingTopics);
+      setAiCandidates(result.aiCandidates);
+      setReviewSummary(null);
+      setMigrationPreview(null);
       setSelectedEventId(result.events[0]?.id ?? null);
       setSelectedMediaId(result.mediaAssets[0]?.id ?? null);
       setSelectedPlaylistId(result.playlists[0]?.id ?? null);
@@ -245,6 +281,44 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     });
   }, [api, project, run, selectedEventId, selectedMediaId]);
 
+  const previewMigration = useCallback(async () => {
+    if (!api || !project) {
+      return;
+    }
+
+    await run(async () => {
+      const preview = await api.imports.previewMigration(project.id);
+      setMigrationPreview(preview);
+    });
+  }, [api, project, run]);
+
+  const commitMigration = useCallback(async () => {
+    if (!api || !project || !migrationPreview || migrationPreview.kind === "unknown") {
+      return;
+    }
+
+    await run(async () => {
+      const result = await api.imports.commitMigration({
+        projectId: project.id,
+        mediaId: selectedMediaId ?? undefined,
+        sourcePath: migrationPreview.sourcePath,
+        kind: migrationPreview.kind,
+        mapping: migrationPreview.mapping,
+      });
+      if (result.events.length > 0) {
+        setEvents((current) => [...current, ...result.events].toSorted((a, b) => a.startMs - b.startMs));
+        setSelectedEventId(result.events[0]?.id ?? selectedEventId);
+      }
+      if (migrationPreview.kind === "template_json") {
+        setTemplates(await api.templates.listTemplates(project.id));
+      }
+      setMigrationPreview(null);
+      if (result.warnings.length > 0) {
+        setError(`${result.importedCount} imported, ${result.skippedCount} skipped. ${result.warnings[0]}`);
+      }
+    });
+  }, [api, migrationPreview, project, run, selectedEventId, selectedMediaId]);
+
   const updateMatchEvent = useCallback(
     async (id: string, patch: UpdateEventInput) => {
       await run(async () => {
@@ -274,6 +348,32 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     },
     [api, run],
   );
+
+  const saveTemplate = useCallback(
+    async (template: CodingTemplate) => {
+      if (!api || !project) {
+        setTemplates((current) => current.map((item) => (item.id === template.id ? template : item)));
+        return;
+      }
+      await run(async () => {
+        const saved = await api.templates.saveTemplate({ projectId: project.id, template });
+        setTemplates((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      });
+    },
+    [api, project, run],
+  );
+
+  const importTemplate = useCallback(async () => {
+    if (!api || !project) {
+      return;
+    }
+    await run(async () => {
+      const template = await api.templates.importTemplate(project.id);
+      if (template) {
+        setTemplates((current) => [template, ...current.filter((item) => item.id !== template.id)]);
+      }
+    });
+  }, [api, project, run]);
 
   const createPlaylist = useCallback(
     async (name: string, purpose: PlaylistPurpose): Promise<Playlist | null> => {
@@ -406,6 +506,102 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     [api, run],
   );
 
+  const generateReview = useCallback(async () => {
+    if (!api || !project) {
+      return;
+    }
+    await run(async () => {
+      const summary = await api.review.generateReview(project.id);
+      setReviewSummary(summary);
+      setTrainingTopics(summary.trainingTopics);
+      setPlaylists(await api.playlists.listPlaylists(project.id));
+    });
+  }, [api, project, run]);
+
+  const generateAiCandidates = useCallback(async () => {
+    if (!api || !project) {
+      return;
+    }
+    await run(async () => {
+      setAiCandidates(await api.ai.generateCandidates(project.id));
+    });
+  }, [api, project, run]);
+
+  const confirmAiCandidate = useCallback(
+    async (id: string) => {
+      if (!api) {
+        return;
+      }
+      await run(async () => {
+        const result = await api.ai.confirmCandidate(id);
+        setEvents((current) => [...current, result.event].toSorted((a, b) => a.startMs - b.startMs));
+        setAiCandidates(result.candidates);
+        setSelectedEventId(result.event.id);
+      });
+    },
+    [api, run],
+  );
+
+  const ignoreAiCandidate = useCallback(
+    async (id: string) => {
+      if (!api) {
+        return;
+      }
+      await run(async () => {
+        setAiCandidates(await api.ai.ignoreCandidate(id));
+      });
+    },
+    [api, run],
+  );
+
+  const createPlayer = useCallback(
+    async (input: CreatePlayerInput) => {
+      if (!api) {
+        return;
+      }
+      await run(async () => {
+        const player = await api.players.createPlayer(input);
+        setPlayers((current) => [player, ...current.filter((item) => item.id !== player.id)]);
+      });
+    },
+    [api, run],
+  );
+
+  const updatePlayer = useCallback(
+    async (id: string, patch: UpdatePlayerInput) => {
+      if (!api) {
+        return;
+      }
+      await run(async () => {
+        const player = await api.players.updatePlayer(id, patch);
+        setPlayers((current) => current.map((item) => (item.id === id ? player : item)));
+      });
+    },
+    [api, run],
+  );
+
+  const generateTrainingTopics = useCallback(async () => {
+    if (!api || !project) {
+      return;
+    }
+    await run(async () => {
+      setTrainingTopics(await api.training.generateTopics(project.id));
+    });
+  }, [api, project, run]);
+
+  const createTrainingTopic = useCallback(
+    async (input: CreateTrainingTopicInput) => {
+      if (!api) {
+        return;
+      }
+      await run(async () => {
+        const topic = await api.training.createTopic(input);
+        setTrainingTopics((current) => [topic, ...current.filter((item) => item.id !== topic.id)]);
+      });
+    },
+    [api, run],
+  );
+
   const exportCsv = useCallback(
     async (playlistId?: string) => {
       if (!api || !project) {
@@ -454,6 +650,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     [api, project, run],
   );
 
+  const exportBackup = useCallback(async () => {
+    if (!api || !project) return;
+    await run(async () => {
+      const job = await api.exports.exportBackup(project.id);
+      setExportJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+    });
+  }, [api, project, run]);
+
   const value = useMemo<ProjectState>(
     () => ({
       project,
@@ -464,6 +668,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       playlists,
       drawings,
       exportJobs,
+      players,
+      trainingTopics,
+      aiCandidates,
+      reviewSummary,
+      migrationPreview,
       recentProjects,
       selectedEventId,
       selectedMediaId,
@@ -477,18 +686,31 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       openRecentProject,
       importPrimaryVideo,
       importCsvEvents,
+      previewMigration,
+      commitMigration,
       createMatchEvent,
       updateMatchEvent,
       deleteMatchEvent,
+      saveTemplate,
+      importTemplate,
       createPlaylist,
       addEventToPlaylist,
       removePlaylistItem,
       saveCurrentDrawing,
       deleteDrawing,
+      generateReview,
+      generateAiCandidates,
+      confirmAiCandidate,
+      ignoreAiCandidate,
+      createPlayer,
+      updatePlayer,
+      generateTrainingTopics,
+      createTrainingTopic,
       exportCsv,
       exportHtml,
       exportVideo,
       exportPlaylistVideo,
+      exportBackup,
       selectEvent: setSelectedEventId,
       selectPlaylist: setSelectedPlaylistId,
       clearError: () => setError(null),
@@ -502,6 +724,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       playlists,
       drawings,
       exportJobs,
+      players,
+      trainingTopics,
+      aiCandidates,
+      reviewSummary,
+      migrationPreview,
       recentProjects,
       selectedEventId,
       selectedMediaId,
@@ -515,18 +742,31 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       openRecentProject,
       importPrimaryVideo,
       importCsvEvents,
+      previewMigration,
+      commitMigration,
       createMatchEvent,
       updateMatchEvent,
       deleteMatchEvent,
+      saveTemplate,
+      importTemplate,
       createPlaylist,
       addEventToPlaylist,
       removePlaylistItem,
       saveCurrentDrawing,
       deleteDrawing,
+      generateReview,
+      generateAiCandidates,
+      confirmAiCandidate,
+      ignoreAiCandidate,
+      createPlayer,
+      updatePlayer,
+      generateTrainingTopics,
+      createTrainingTopic,
       exportCsv,
       exportHtml,
       exportVideo,
       exportPlaylistVideo,
+      exportBackup,
     ],
   );
 
