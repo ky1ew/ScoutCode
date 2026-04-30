@@ -136,11 +136,13 @@ export function AnalysisWorkspace() {
     "detail" | "events" | "filters" | "playlist" | "review" | "ai" | "players" | "training" | "template" | "migration"
   >("detail");
   const [timelineZoom, setTimelineZoom] = useState(1);
+  const [timelineView, setTimelineView] = useState<"timeline" | "matrix">("timeline");
   const [drawingTool, setDrawingTool] = useState<DrawingTool | "select">("select");
   const [draftLayers, setDraftLayers] = useState<DrawingLayer[]>([]);
   const [selectedDraftLayerId, setSelectedDraftLayerId] = useState<string | null>(null);
   const [selectedSavedDrawingId, setSelectedSavedDrawingId] = useState<string | null>(null);
   const [collapsedCodeGroups, setCollapsedCodeGroups] = useState<Set<string>>(() => new Set());
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false);
 
   const activeTemplate = templates[0];
   const selectedEvent = useMemo(
@@ -374,13 +376,68 @@ export function AnalysisWorkspace() {
     [events, seekTo, selectEvent],
   );
 
+  const runCommand = useCallback((command: () => void) => {
+    setCommandMenuOpen(false);
+    command();
+  }, []);
+
   return (
     <div className="app-shell">
       <header className="top-bar">
         <div className="brand-block">
-          <button className="icon-button" type="button" disabled title="菜单将在后续版本接入">
+          <button
+            className="icon-button"
+            type="button"
+            aria-expanded={commandMenuOpen}
+            title="打开命令菜单"
+            onClick={() => setCommandMenuOpen((current) => !current)}
+          >
             <Menu size={18} />
           </button>
+          {commandMenuOpen ? (
+            <div className="command-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => runCommand(() => void openProject())}>
+                <FolderOpen size={15} />
+                打开项目
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!project || loading}
+                onClick={() => runCommand(() => void importPrimaryVideo("copy"))}
+              >
+                <Upload size={15} />
+                导入视频
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!project || !selectedMedia || loading}
+                onClick={() => runCommand(() => void importCsvEvents())}
+              >
+                <Import size={15} />
+                导入 CSV
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!project || events.length === 0 || loading}
+                onClick={() => runCommand(() => void exportHtml(selectedPlaylist?.id))}
+              >
+                <Download size={15} />
+                导出报告
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!project || loading}
+                onClick={() => runCommand(() => void exportBackup())}
+              >
+                <Save size={15} />
+                项目备份
+              </button>
+            </div>
+          ) : null}
           <span className="brand">ScoutCode</span>
           <span className="divider" />
           <FolderOpen size={17} />
@@ -837,10 +894,20 @@ export function AnalysisWorkspace() {
         <section className="timeline-panel">
           <div className="timeline-toolbar">
             <div className="timeline-tabs">
-              <button className="active" type="button" disabled title="当前视图">
+              <button
+                className={timelineView === "timeline" ? "active" : ""}
+                type="button"
+                title="显示时间线视图"
+                onClick={() => setTimelineView("timeline")}
+              >
                 时间线
               </button>
-              <button type="button" disabled title="M3 实现">
+              <button
+                className={timelineView === "matrix" ? "active" : ""}
+                type="button"
+                title="显示矩阵占位视图"
+                onClick={() => setTimelineView("matrix")}
+              >
                 矩阵视图
               </button>
             </div>
@@ -856,37 +923,43 @@ export function AnalysisWorkspace() {
               />
             </div>
           </div>
-          <div className="timeline-ruler">
-            {Array.from({ length: 10 }, (_, index) => (
-              <span key={index}>{formatTimecode((Math.max(durationMs, 5_400_000) / 9) * index)}</span>
-            ))}
-          </div>
-          <div className="tracks" style={{ ["--timeline-zoom" as string]: timelineZoom }}>
-            {(Object.keys(groupedEvents) as MatchPhase[]).map((phase) => (
-              <div className="track-row" key={phase}>
-                <div className="track-label">
-                  <span className={`phase-dot ${phaseClass[phase]}`} />
-                  {phaseLabels[phase]}
-                </div>
-                <div className="track-lane">
-                  {groupedEvents[phase].map((event) => (
-                    <button
-                      className={`event-chip ${phaseClass[phase]} ${selectedEventId === event.id ? "selected" : ""}`}
-                      key={event.id}
-                      type="button"
-                      style={{
-                        left: `${eventLeft(event, durationMs)}%`,
-                        width: `${eventWidth(event, durationMs)}%`,
-                      }}
-                      onClick={() => selectAndSeekEvent(event.id)}
-                      title={`${event.eventType} ${formatTimecode(event.startMs, true)}`}
-                    />
-                  ))}
-                </div>
+          {timelineView === "timeline" ? (
+            <>
+              <div className="timeline-ruler">
+                {Array.from({ length: 10 }, (_, index) => (
+                  <span key={index}>{formatTimecode((Math.max(durationMs, 5_400_000) / 9) * index)}</span>
+                ))}
               </div>
-            ))}
-            <div className="playhead" style={{ left: `${durationMs > 0 ? (currentMs / durationMs) * 100 : 0}%` }} />
-          </div>
+              <div className="tracks" style={{ ["--timeline-zoom" as string]: timelineZoom }}>
+                {(Object.keys(groupedEvents) as MatchPhase[]).map((phase) => (
+                  <div className="track-row" key={phase}>
+                    <div className="track-label">
+                      <span className={`phase-dot ${phaseClass[phase]}`} />
+                      {phaseLabels[phase]}
+                    </div>
+                    <div className="track-lane">
+                      {groupedEvents[phase].map((event) => (
+                        <button
+                          className={`event-chip ${phaseClass[phase]} ${selectedEventId === event.id ? "selected" : ""}`}
+                          key={event.id}
+                          type="button"
+                          style={{
+                            left: `${eventLeft(event, durationMs)}%`,
+                            width: `${eventWidth(event, durationMs)}%`,
+                          }}
+                          onClick={() => selectAndSeekEvent(event.id)}
+                          title={`${event.eventType} ${formatTimecode(event.startMs, true)}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div className="playhead" style={{ left: `${durationMs > 0 ? (currentMs / durationMs) * 100 : 0}%` }} />
+              </div>
+            </>
+          ) : (
+            <TimelineMatrix groupedEvents={groupedEvents} onSelect={selectAndSeekEvent} />
+          )}
           <footer className="workspace-status">
             <span>项目：{projectPath ?? "未保存"}</span>
             <span>视频：{selectedMedia?.displayName ?? "未导入"}</span>
@@ -909,6 +982,37 @@ export function AnalysisWorkspace() {
           onImport={() => void importPrimaryVideo("copy")}
         />
       ) : null}
+    </div>
+  );
+}
+
+function TimelineMatrix({
+  groupedEvents,
+  onSelect,
+}: {
+  groupedEvents: Record<MatchPhase, MatchEvent[]>;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="timeline-matrix" aria-label="矩阵视图占位">
+      {(Object.keys(groupedEvents) as MatchPhase[]).map((phase) => (
+        <section className="matrix-phase" key={phase}>
+          <div>
+            <span className={`phase-dot ${phaseClass[phase]}`} />
+            <strong>{phaseLabels[phase]}</strong>
+          </div>
+          <span>{groupedEvents[phase].length} 个事件</span>
+          <div className="matrix-event-list">
+            {groupedEvents[phase].slice(0, 3).map((event) => (
+              <button type="button" key={event.id} onClick={() => onSelect(event.id)}>
+                {event.eventType}
+              </button>
+            ))}
+            {groupedEvents[phase].length === 0 ? <small>编码后显示聚合事件</small> : null}
+          </div>
+        </section>
+      ))}
+      <div className="matrix-note">矩阵视图会在后续版本完善筛选、交叉统计和批量入片段集；当前先提供可点击入口与阶段聚合预览。</div>
     </div>
   );
 }
