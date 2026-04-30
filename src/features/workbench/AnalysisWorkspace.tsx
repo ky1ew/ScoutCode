@@ -143,6 +143,7 @@ export function AnalysisWorkspace() {
   const [selectedSavedDrawingId, setSelectedSavedDrawingId] = useState<string | null>(null);
   const [collapsedCodeGroups, setCollapsedCodeGroups] = useState<Set<string>>(() => new Set());
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
+  const commandMenuRef = useRef<HTMLDivElement | null>(null);
 
   const activeTemplate = templates[0];
   const selectedEvent = useMemo(
@@ -363,6 +364,32 @@ export function AnalysisWorkspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeTemplate, createFromButton, currentMs, deleteSelectedDrawing, seekTo, togglePlayback]);
 
+  useEffect(() => {
+    if (!commandMenuOpen) {
+      return undefined;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && commandMenuRef.current?.contains(target)) {
+        return;
+      }
+      setCommandMenuOpen(false);
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCommandMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [commandMenuOpen]);
+
   const selectAndSeekEvent = useCallback(
     (id: string) => {
       selectEvent(id);
@@ -395,7 +422,7 @@ export function AnalysisWorkspace() {
             <Menu size={18} />
           </button>
           {commandMenuOpen ? (
-            <div className="command-menu" role="menu">
+            <div className="command-menu" role="menu" ref={commandMenuRef}>
               <button type="button" role="menuitem" onClick={() => runCommand(() => void openProject())}>
                 <FolderOpen size={15} />
                 打开项目
@@ -777,6 +804,7 @@ export function AnalysisWorkspace() {
             {[
               ["detail", "事件详情"],
               ["events", "事件列表"],
+              ["filters", "筛选"],
               ["playlist", "片段集"],
               ["review", "复盘"],
               ["ai", "AI"],
@@ -806,7 +834,7 @@ export function AnalysisWorkspace() {
             <EventList events={visibleEvents} selectedEventId={selectedEventId} onSelect={selectAndSeekEvent} />
           ) : null}
           {rightTab === "filters" ? (
-            <Filters filterPhase={filterPhase} setFilterPhase={setFilterPhase} />
+            <Filters filterPhase={filterPhase} setFilterPhase={setFilterPhase} onOpenAiCandidates={() => setRightTab("ai")} />
           ) : null}
           {rightTab === "playlist" ? (
             <PlaylistPanel
@@ -1200,9 +1228,11 @@ function EventList({
 function Filters({
   filterPhase,
   setFilterPhase,
+  onOpenAiCandidates,
 }: {
   filterPhase: MatchPhase | "all";
   setFilterPhase: (phase: MatchPhase | "all") => void;
+  onOpenAiCandidates: () => void;
 }) {
   return (
     <div className="filters">
@@ -1222,7 +1252,7 @@ function Filters({
           {label}
         </button>
       ))}
-      <button type="button" disabled>
+      <button type="button" onClick={onOpenAiCandidates}>
         AI候选
       </button>
     </div>

@@ -31,6 +31,27 @@ describe("workbench interaction fixes", () => {
     expect(state.openProject).toHaveBeenCalledOnce();
   });
 
+  it("closes the command menu from Escape", () => {
+    useProjectMock.mockReturnValue(createState());
+
+    render(<AnalysisWorkspace />);
+    fireEvent.click(screen.getByTitle("打开命令菜单"));
+    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("routes the filters panel AI button to the AI candidate panel", () => {
+    useProjectMock.mockReturnValue(createState());
+
+    render(<AnalysisWorkspace />);
+    fireEvent.click(screen.getByText("筛选"));
+    fireEvent.click(screen.getByRole("button", { name: "AI候选" }));
+
+    expect(screen.getByText("生成 AI 候选")).toBeTruthy();
+  });
+
   it("switches the bottom panel into matrix placeholder view", () => {
     useProjectMock.mockReturnValue(createState());
 
