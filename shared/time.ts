@@ -19,6 +19,10 @@ export function normalizeEventRange(
     return { startMs: safeStart, endMs: safeEnd };
   }
 
+  if (safeStart > safeEnd) {
+    return { startMs: safeEnd, endMs: safeStart };
+  }
+
   const half = Math.max(500, Math.round(fallbackDurationMs / 2));
   const center = clampTimeMs(fallbackCenterMs);
   return {
