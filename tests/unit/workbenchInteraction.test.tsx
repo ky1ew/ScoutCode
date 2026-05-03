@@ -42,16 +42,6 @@ describe("workbench interaction fixes", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("routes the filters panel AI button to the AI candidate panel", () => {
-    useProjectMock.mockReturnValue(createState());
-
-    render(<AnalysisWorkspace />);
-    fireEvent.click(screen.getByText("筛选"));
-    fireEvent.click(screen.getByRole("button", { name: "AI候选" }));
-
-    expect(screen.getByText("生成 AI 候选")).toBeTruthy();
-  });
-
   it("switches the bottom panel into matrix placeholder view", () => {
     useProjectMock.mockReturnValue(createState());
 
@@ -60,6 +50,15 @@ describe("workbench interaction fixes", () => {
 
     expect(screen.getByLabelText("矩阵视图占位")).toBeTruthy();
     expect(screen.getByText(/矩阵视图会在后续版本完善/)).toBeTruthy();
+  });
+
+  it("uses the selected media duration for transport and timeline", () => {
+    useProjectMock.mockReturnValue(createState());
+
+    render(<AnalysisWorkspace />);
+
+    expect(screen.getAllByText("00:01:30").length).toBeGreaterThan(0);
+    expect(screen.queryByText("01:30:00")).toBeNull();
   });
 
   it("selects and deletes a saved drawing from the video overlay", () => {
@@ -139,7 +138,6 @@ function createState() {
     exportJobs: [],
     players: [],
     trainingTopics: [],
-    aiCandidates: [],
     reviewSummary: null,
     migrationPreview: null,
     recentProjects: [],
@@ -168,9 +166,6 @@ function createState() {
     saveCurrentDrawing: vi.fn(),
     deleteDrawing: vi.fn().mockResolvedValue(undefined),
     generateReview: vi.fn(),
-    generateAiCandidates: vi.fn(),
-    confirmAiCandidate: vi.fn(),
-    ignoreAiCandidate: vi.fn(),
     createPlayer: vi.fn(),
     updatePlayer: vi.fn(),
     generateTrainingTopics: vi.fn(),

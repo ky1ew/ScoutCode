@@ -128,11 +128,6 @@ function registerIpc(): void {
 
   ipcMain.handle("review:generate", (_event, projectId: string) => projectStore.generateReview(projectId));
 
-  ipcMain.handle("ai:list", (_event, projectId: string) => projectStore.listAiCandidates(projectId));
-  ipcMain.handle("ai:generate", (_event, projectId: string) => projectStore.generateAiCandidates(projectId));
-  ipcMain.handle("ai:confirm", (_event, id: string) => projectStore.confirmAiCandidate(id));
-  ipcMain.handle("ai:ignore", (_event, id: string) => projectStore.ignoreAiCandidate(id));
-
   ipcMain.handle("players:list", (_event, projectId: string) => projectStore.listPlayers(projectId));
   ipcMain.handle("players:create", (_event, input: CreatePlayerInput) => projectStore.createPlayer(input));
   ipcMain.handle("players:update", (_event, id: string, patch: UpdatePlayerInput) => projectStore.updatePlayer(id, patch));

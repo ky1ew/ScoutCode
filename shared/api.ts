@@ -1,7 +1,6 @@
 import type {
   CodingTemplate,
   AddEventToPlaylistInput,
-  AiCandidate,
   CommitMigrationInput,
   CreateEventInput,
   CreatePlaylistInput,
@@ -58,12 +57,6 @@ export type DesktopApi = {
   };
   review: {
     generateReview(projectId: string): Promise<ReviewSummary>;
-  };
-  ai: {
-    listCandidates(projectId: string): Promise<AiCandidate[]>;
-    generateCandidates(projectId: string): Promise<AiCandidate[]>;
-    confirmCandidate(id: string): Promise<{ event: MatchEvent; candidates: AiCandidate[] }>;
-    ignoreCandidate(id: string): Promise<AiCandidate[]>;
   };
   players: {
     listPlayers(projectId: string): Promise<Player[]>;

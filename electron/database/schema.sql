@@ -135,20 +135,6 @@ CREATE TABLE IF NOT EXISTS training_topics (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS ai_candidates (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  media_id TEXT NOT NULL,
-  start_ms INTEGER NOT NULL,
-  end_ms INTEGER NOT NULL,
-  event_type TEXT NOT NULL,
-  phase TEXT,
-  confidence REAL NOT NULL,
-  reason TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS drawings (
   id TEXT PRIMARY KEY,
@@ -185,6 +171,5 @@ CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlis
 CREATE INDEX IF NOT EXISTS idx_players_project ON players(project_id, name);
 CREATE INDEX IF NOT EXISTS idx_event_player_links_event ON event_player_links(event_id);
 CREATE INDEX IF NOT EXISTS idx_training_topics_project ON training_topics(project_id, priority);
-CREATE INDEX IF NOT EXISTS idx_ai_candidates_project ON ai_candidates(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_drawings_project_event ON drawings(project_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_export_jobs_project ON export_jobs(project_id, created_at);

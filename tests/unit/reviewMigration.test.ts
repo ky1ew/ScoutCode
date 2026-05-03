@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildAiSuggestions, buildTrainingTopics, previewMigrationFile } from "../../electron/services/projectStore";
+import { buildTrainingTopics, previewMigrationFile } from "../../electron/services/projectStore";
 import type { MatchEvent } from "../../shared/domain";
 
 const tempDir = join(tmpdir(), "scoutcode-review-migration-test");
@@ -27,17 +27,6 @@ describe("review and migration helpers", () => {
     expect(topics.map((topic) => topic.title)).toContain("Final-third decision making");
     expect(topics.some((topic) => topic.phase === "defense")).toBe(true);
     expect(topics.every((topic) => topic.evidenceEventIds.length > 0)).toBe(true);
-  });
-
-  it("generates explainable AI candidates without overlapping confirmed events", () => {
-    const events = [event("1", "shot", "attack", 90_000, 100_000)];
-
-    const suggestions = buildAiSuggestions("project-1", "media-1", events, 30 * 60 * 1000);
-
-    expect(suggestions.length).toBeGreaterThan(0);
-    expect(suggestions.every((candidate) => candidate.status === "pending")).toBe(true);
-    expect(suggestions.some((candidate) => candidate.reason.length > 0)).toBe(true);
-    expect(suggestions.every((candidate) => candidate.startMs >= 0)).toBe(true);
   });
 
   it("previews a legacy CSV migration mapping", () => {

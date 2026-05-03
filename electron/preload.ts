@@ -47,12 +47,6 @@ const desktopApi: DesktopApi = {
   review: {
     generateReview: (projectId: string) => ipcRenderer.invoke("review:generate", projectId),
   },
-  ai: {
-    listCandidates: (projectId: string) => ipcRenderer.invoke("ai:list", projectId),
-    generateCandidates: (projectId: string) => ipcRenderer.invoke("ai:generate", projectId),
-    confirmCandidate: (id: string) => ipcRenderer.invoke("ai:confirm", id),
-    ignoreCandidate: (id: string) => ipcRenderer.invoke("ai:ignore", id),
-  },
   players: {
     listPlayers: (projectId: string) => ipcRenderer.invoke("players:list", projectId),
     createPlayer: (input: CreatePlayerInput) => ipcRenderer.invoke("players:create", input),

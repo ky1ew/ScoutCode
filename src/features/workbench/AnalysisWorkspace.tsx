@@ -1,6 +1,5 @@
 import {
   Bookmark,
-  Brain,
   ChevronDown,
   Circle,
   ClipboardList,
@@ -26,7 +25,6 @@ import {
   Trash2,
   Undo2,
   Upload,
-  Wand2,
   Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
@@ -34,7 +32,6 @@ import { useProject } from "../../app/ProjectContext";
 import type {
   CodingButton,
   CodingTemplate,
-  AiCandidate,
   Drawing,
   DrawingLayer,
   DrawingTool,
@@ -79,7 +76,6 @@ export function AnalysisWorkspace() {
     exportJobs,
     players,
     trainingTopics,
-    aiCandidates,
     reviewSummary,
     migrationPreview,
     recentProjects,
@@ -107,9 +103,6 @@ export function AnalysisWorkspace() {
     saveCurrentDrawing,
     deleteDrawing,
     generateReview,
-    generateAiCandidates,
-    confirmAiCandidate,
-    ignoreAiCandidate,
     createPlayer,
     updatePlayer,
     generateTrainingTopics,
@@ -133,7 +126,7 @@ export function AnalysisWorkspace() {
   const [markOutMs, setMarkOutMs] = useState<number | null>(null);
   const [filterPhase, setFilterPhase] = useState<MatchPhase | "all">("all");
   const [rightTab, setRightTab] = useState<
-    "detail" | "events" | "filters" | "playlist" | "review" | "ai" | "players" | "training" | "template" | "migration"
+    "detail" | "events" | "filters" | "playlist" | "review" | "players" | "training" | "template" | "migration"
   >("detail");
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [timelineView, setTimelineView] = useState<"timeline" | "matrix">("timeline");
@@ -154,6 +147,7 @@ export function AnalysisWorkspace() {
     () => mediaAssets.find((asset) => asset.id === selectedMediaId) ?? mediaAssets[0] ?? null,
     [mediaAssets, selectedMediaId],
   );
+  const mediaDurationMs = Math.max(durationMs, selectedMedia?.durationMs ?? 0, 1);
   const selectedPlaylist = useMemo(
     () => playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? playlists[0] ?? null,
     [playlists, selectedPlaylistId],
@@ -556,16 +550,6 @@ export function AnalysisWorkspace() {
               ) : null}
             </section>
           ))}
-          <section className="code-group disabled-group">
-            <div className="group-title">
-              <span className="phase-dot phase-muted" />
-              <span>AI候选</span>
-              <Wand2 size={14} />
-            </div>
-            <button className="wide-disabled" type="button" disabled={!project || !selectedMedia} onClick={() => setRightTab("ai")}>
-              生成并确认候选片段
-            </button>
-          </section>
         </aside>
 
         <section className="video-column">
@@ -764,11 +748,11 @@ export function AnalysisWorkspace() {
               <input
                 type="range"
                 min={0}
-                max={Math.max(durationMs, selectedMedia?.durationMs ?? 0, 1)}
-                value={Math.min(currentMs, Math.max(durationMs, selectedMedia?.durationMs ?? 0, 1))}
+                max={mediaDurationMs}
+                value={Math.min(currentMs, mediaDurationMs)}
                 onChange={(event) => seekTo(Number(event.target.value))}
               />
-              <span>{formatTimecode(Math.max(durationMs, selectedMedia?.durationMs ?? 0))}</span>
+              <span>{formatTimecode(mediaDurationMs)}</span>
             </div>
             <div className="transport-buttons">
               <button type="button" onClick={() => seekTo(currentMs - 10_000)} title="后退 10 秒">
@@ -807,7 +791,6 @@ export function AnalysisWorkspace() {
               ["filters", "筛选"],
               ["playlist", "片段集"],
               ["review", "复盘"],
-              ["ai", "AI"],
               ["players", "球员"],
               ["training", "训练"],
               ["template", "模板"],
@@ -834,7 +817,7 @@ export function AnalysisWorkspace() {
             <EventList events={visibleEvents} selectedEventId={selectedEventId} onSelect={selectAndSeekEvent} />
           ) : null}
           {rightTab === "filters" ? (
-            <Filters filterPhase={filterPhase} setFilterPhase={setFilterPhase} onOpenAiCandidates={() => setRightTab("ai")} />
+            <Filters filterPhase={filterPhase} setFilterPhase={setFilterPhase} />
           ) : null}
           {rightTab === "playlist" ? (
             <PlaylistPanel
@@ -865,15 +848,6 @@ export function AnalysisWorkspace() {
               trainingTopics={trainingTopics}
               eventById={new Map(events.map((event) => [event.id, event]))}
               onGenerate={() => void generateReview()}
-            />
-          ) : null}
-          {rightTab === "ai" ? (
-            <AiCandidatePanel
-              candidates={aiCandidates}
-              onGenerate={() => void generateAiCandidates()}
-              onConfirm={(id) => void confirmAiCandidate(id)}
-              onIgnore={(id) => void ignoreAiCandidate(id)}
-              onSeek={(candidate) => seekTo(candidate.startMs)}
             />
           ) : null}
           {rightTab === "players" ? (
@@ -955,7 +929,7 @@ export function AnalysisWorkspace() {
             <>
               <div className="timeline-ruler">
                 {Array.from({ length: 10 }, (_, index) => (
-                  <span key={index}>{formatTimecode((Math.max(durationMs, 5_400_000) / 9) * index)}</span>
+                  <span key={index}>{formatTimecode((mediaDurationMs / 9) * index)}</span>
                 ))}
               </div>
               <div className="tracks" style={{ ["--timeline-zoom" as string]: timelineZoom }}>
@@ -972,8 +946,8 @@ export function AnalysisWorkspace() {
                           key={event.id}
                           type="button"
                           style={{
-                            left: `${eventLeft(event, durationMs)}%`,
-                            width: `${eventWidth(event, durationMs)}%`,
+                            left: `${eventLeft(event, mediaDurationMs)}%`,
+                            width: `${eventWidth(event, mediaDurationMs)}%`,
                           }}
                           onClick={() => selectAndSeekEvent(event.id)}
                           title={`${event.eventType} ${formatTimecode(event.startMs, true)}`}
@@ -982,7 +956,7 @@ export function AnalysisWorkspace() {
                     </div>
                   </div>
                 ))}
-                <div className="playhead" style={{ left: `${durationMs > 0 ? (currentMs / durationMs) * 100 : 0}%` }} />
+                <div className="playhead" style={{ left: `${Math.min(100, (currentMs / mediaDurationMs) * 100)}%` }} />
               </div>
             </>
           ) : (
@@ -1228,11 +1202,9 @@ function EventList({
 function Filters({
   filterPhase,
   setFilterPhase,
-  onOpenAiCandidates,
 }: {
   filterPhase: MatchPhase | "all";
   setFilterPhase: (phase: MatchPhase | "all") => void;
-  onOpenAiCandidates: () => void;
 }) {
   return (
     <div className="filters">
@@ -1252,9 +1224,6 @@ function Filters({
           {label}
         </button>
       ))}
-      <button type="button" onClick={onOpenAiCandidates}>
-        AI候选
-      </button>
     </div>
   );
 }
@@ -1425,47 +1394,6 @@ function ReviewPanel({
           </div>
         ))}
       </section>
-    </div>
-  );
-}
-
-function AiCandidatePanel({
-  candidates,
-  onGenerate,
-  onConfirm,
-  onIgnore,
-  onSeek,
-}: {
-  candidates: AiCandidate[];
-  onGenerate: () => void;
-  onConfirm: (id: string) => void;
-  onIgnore: (id: string) => void;
-  onSeek: (candidate: AiCandidate) => void;
-}) {
-  const pending = candidates.filter((candidate) => candidate.status === "pending");
-  return (
-    <div className="inspector-stack">
-      <button className="wide-action" type="button" onClick={onGenerate}>
-        <Brain size={15} />
-        生成 AI 候选
-      </button>
-      <span className="subtle">AI v1 只给可解释候选，确认后才写入正式时间线。</span>
-      <div className="candidate-list">
-        {pending.map((candidate) => (
-          <article className="candidate-card" key={candidate.id}>
-            <button type="button" onClick={() => onSeek(candidate)}>
-              <strong>{candidate.eventType}</strong>
-              <span>{formatTimecode(candidate.startMs, true)} - {formatTimecode(candidate.endMs, true)}</span>
-            </button>
-            <p>{Math.round(candidate.confidence * 100)}% / {candidate.reason}</p>
-            <div>
-              <button type="button" onClick={() => onConfirm(candidate.id)}>确认</button>
-              <button type="button" onClick={() => onIgnore(candidate.id)}>忽略</button>
-            </div>
-          </article>
-        ))}
-        {pending.length === 0 ? <span className="subtle">暂无待确认候选。</span> : null}
-      </div>
     </div>
   );
 }

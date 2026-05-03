@@ -10,6 +10,5 @@ describe("database schema", () => {
     expect(schemaSql).toContain("CREATE TABLE IF NOT EXISTS players");
     expect(schemaSql).toContain("CREATE TABLE IF NOT EXISTS event_player_links");
     expect(schemaSql).toContain("CREATE TABLE IF NOT EXISTS training_topics");
-    expect(schemaSql).toContain("CREATE TABLE IF NOT EXISTS ai_candidates");
   });
 });

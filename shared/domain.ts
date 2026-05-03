@@ -177,23 +177,6 @@ export type TrainingTopic = {
   updatedAt: string;
 };
 
-export type AiCandidateStatus = "pending" | "confirmed" | "ignored";
-
-export type AiCandidate = {
-  id: string;
-  projectId: string;
-  mediaId: string;
-  startMs: number;
-  endMs: number;
-  eventType: string;
-  phase?: MatchPhase;
-  confidence: number;
-  reason: string;
-  status: AiCandidateStatus;
-  createdAt: string;
-  updatedAt: string;
-};
-
 export type ReviewSummary = {
   projectId: string;
   generatedAt: string;
@@ -279,7 +262,6 @@ export type ProjectOpenResult = {
   exportJobs: ExportJob[];
   players: Player[];
   trainingTopics: TrainingTopic[];
-  aiCandidates: AiCandidate[];
 };
 
 export type ImportVideoInput = {

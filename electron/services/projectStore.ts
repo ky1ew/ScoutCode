@@ -10,7 +10,6 @@ import { schemaSql } from "../database/schema.js";
 import { createDefaultFootballTemplate } from "../../shared/defaultTemplate.js";
 import type {
   AddEventToPlaylistInput,
-  AiCandidate,
   CommitMigrationInput,
   CodingTemplate,
   CreateEventInput,
@@ -183,21 +182,6 @@ type TrainingTopicRow = {
   updated_at: string;
 };
 
-type AiCandidateRow = {
-  id: string;
-  project_id: string;
-  media_id: string;
-  start_ms: number;
-  end_ms: number;
-  event_type: string;
-  phase?: MatchEvent["phase"];
-  confidence: number;
-  reason: string;
-  status: AiCandidate["status"];
-  created_at: string;
-  updated_at: string;
-};
-
 export class ProjectStore {
   private readonly contexts = new Map<string, ProjectContext>();
   private readonly mediaPaths = new Map<string, string>();
@@ -278,7 +262,6 @@ export class ProjectStore {
       exportJobs: [],
       players: [],
       trainingTopics: [],
-      aiCandidates: [],
     };
   }
 
@@ -313,7 +296,6 @@ export class ProjectStore {
     const exportJobs = this.listExportJobsFromDb(db, project.id);
     const players = this.listPlayersFromDb(db, project.id);
     const trainingTopics = this.listTrainingTopicsFromDb(db, project.id);
-    const aiCandidates = this.listAiCandidatesFromDb(db, project.id);
     const finalTemplates = templates.length > 0 ? templates : [this.ensureDefaultTemplate(db, project.id)];
 
     this.contexts.set(project.id, { projectId: project.id, projectPath, db });
@@ -335,7 +317,6 @@ export class ProjectStore {
       exportJobs,
       players,
       trainingTopics,
-      aiCandidates,
     };
   }
 
@@ -831,88 +812,6 @@ export class ProjectStore {
     };
   }
 
-  listAiCandidates(projectId: string): AiCandidate[] {
-    const context = this.requireContext(projectId);
-    return this.listAiCandidatesFromDb(context.db, projectId);
-  }
-
-  generateAiCandidates(projectId: string): AiCandidate[] {
-    const context = this.requireContext(projectId);
-    const events = this.listEventsFromDb(context.db, projectId);
-    const media = this.listMediaFromDb(context.db, projectId, context.projectPath)[0];
-    if (!media) {
-      return this.listAiCandidatesFromDb(context.db, projectId);
-    }
-
-    const now = new Date().toISOString();
-    const suggestions = buildAiSuggestions(projectId, media.id, events, media.durationMs);
-    for (const candidate of suggestions) {
-      const duplicate = context.db
-        .prepare("SELECT id FROM ai_candidates WHERE project_id = ? AND start_ms = ? AND event_type = ?")
-        .get(projectId, candidate.startMs, candidate.eventType);
-      if (duplicate) {
-        continue;
-      }
-      context.db.prepare(
-        `INSERT INTO ai_candidates (
-          id, project_id, media_id, start_ms, end_ms, event_type, phase, confidence, reason, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        candidate.id,
-        candidate.projectId,
-        candidate.mediaId,
-        candidate.startMs,
-        candidate.endMs,
-        candidate.eventType,
-        candidate.phase ?? null,
-        candidate.confidence,
-        candidate.reason,
-        "pending",
-        now,
-        now,
-      );
-    }
-
-    return this.listAiCandidatesFromDb(context.db, projectId);
-  }
-
-  confirmAiCandidate(id: string): { event: MatchEvent; candidates: AiCandidate[] } {
-    const context = this.findContextByAiCandidate(id);
-    const candidate = this.getAiCandidateById(context.db, id);
-    if (!candidate) {
-      throw new Error("AI candidate not found");
-    }
-
-    const event = this.createEvent({
-      projectId: candidate.projectId,
-      mediaId: candidate.mediaId,
-      startMs: candidate.startMs,
-      endMs: candidate.endMs,
-      eventType: candidate.eventType,
-      phase: candidate.phase,
-      source: "ai_suggested",
-      confirmed: true,
-      note: candidate.reason,
-    });
-    context.db
-      .prepare("UPDATE ai_candidates SET status = ?, updated_at = ? WHERE id = ?")
-      .run("confirmed", new Date().toISOString(), id);
-
-    return { event, candidates: this.listAiCandidatesFromDb(context.db, candidate.projectId) };
-  }
-
-  ignoreAiCandidate(id: string): AiCandidate[] {
-    const context = this.findContextByAiCandidate(id);
-    const candidate = this.getAiCandidateById(context.db, id);
-    if (!candidate) {
-      throw new Error("AI candidate not found");
-    }
-    context.db
-      .prepare("UPDATE ai_candidates SET status = ?, updated_at = ? WHERE id = ?")
-      .run("ignored", new Date().toISOString(), id);
-    return this.listAiCandidatesFromDb(context.db, candidate.projectId);
-  }
-
   listPlayers(projectId: string): Player[] {
     const context = this.requireContext(projectId);
     return this.ensurePlayersFromEvents(context.db, projectId);
@@ -1193,7 +1092,6 @@ export class ProjectStore {
       drawings: this.listDrawingsFromDb(context.db, projectId),
       players: this.listPlayersFromDb(context.db, projectId),
       trainingTopics: this.listTrainingTopicsFromDb(context.db, projectId),
-      aiCandidates: this.listAiCandidatesFromDb(context.db, projectId),
     };
     const now = new Date().toISOString().replace(/[:.]/g, "-");
     const outputPath = join(context.projectPath, "backups", `scoutcode-backup-${now}.json`);
@@ -1391,16 +1289,6 @@ export class ProjectStore {
     throw new Error("Drawing not found or project is not open");
   }
 
-  private findContextByAiCandidate(id: string): ProjectContext {
-    for (const context of this.contexts.values()) {
-      const row = context.db.prepare("SELECT id FROM ai_candidates WHERE id = ?").get(id);
-      if (row) {
-        return context;
-      }
-    }
-    throw new Error("AI candidate not found or project is not open");
-  }
-
   private findContextByPlayer(id: string): ProjectContext {
     for (const context of this.contexts.values()) {
       const row = context.db.prepare("SELECT id FROM players WHERE id = ?").get(id);
@@ -1521,18 +1409,6 @@ export class ProjectStore {
       .prepare("SELECT * FROM training_topics WHERE project_id = ? ORDER BY priority, created_at DESC")
       .all(projectId) as TrainingTopicRow[];
     return rows.map(trainingTopicFromRow);
-  }
-
-  private listAiCandidatesFromDb(db: DatabaseSync, projectId: string): AiCandidate[] {
-    const rows = db
-      .prepare("SELECT * FROM ai_candidates WHERE project_id = ? ORDER BY status, confidence DESC, start_ms")
-      .all(projectId) as AiCandidateRow[];
-    return rows.map(aiCandidateFromRow);
-  }
-
-  private getAiCandidateById(db: DatabaseSync, id: string): AiCandidate | null {
-    const row = db.prepare("SELECT * FROM ai_candidates WHERE id = ?").get(id) as AiCandidateRow | undefined;
-    return row ? aiCandidateFromRow(row) : null;
   }
 
   private getPlayerById(db: DatabaseSync, id: string): Player | null {
@@ -1897,23 +1773,6 @@ function trainingTopicFromRow(row: TrainingTopicRow): TrainingTopic {
   };
 }
 
-function aiCandidateFromRow(row: AiCandidateRow): AiCandidate {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    mediaId: row.media_id,
-    startMs: row.start_ms,
-    endMs: row.end_ms,
-    eventType: row.event_type,
-    phase: row.phase ?? undefined,
-    confidence: row.confidence,
-    reason: row.reason,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
 function coachingPointForPhase(phase: MatchEvent["phase"], events: MatchEvent[]): string {
   if (events.length === 0) {
     return "No coded clips yet. Add several examples before building the review message.";
@@ -2023,57 +1882,6 @@ export function buildTrainingTopics(projectId: string, events: MatchEvent[]): Tr
       } satisfies TrainingTopic;
     })
     .filter((topic) => topic.evidenceEventIds.length > 0);
-}
-
-export function buildAiSuggestions(projectId: string, mediaId: string, events: MatchEvent[], durationMs: number): AiCandidate[] {
-  const now = new Date().toISOString();
-  const suggestions: AiCandidate[] = [];
-  const occupied = (startMs: number, endMs: number) =>
-    events.some((event) => Math.max(event.startMs, startMs) < Math.min(event.endMs, endMs));
-  const pushCandidate = (
-    startMs: number,
-    endMs: number,
-    eventType: string,
-    phase: MatchEvent["phase"],
-    confidence: number,
-    reason: string,
-  ) => {
-    const range = normalizeEventRange(startMs, endMs, startMs, 10_000);
-    if ((durationMs > 0 && range.startMs >= durationMs) || occupied(range.startMs, range.endMs)) {
-      return;
-    }
-    suggestions.push({
-      id: randomUUID(),
-      projectId,
-      mediaId,
-      startMs: range.startMs,
-      endMs: Math.min(durationMs || range.endMs, range.endMs),
-      eventType,
-      phase,
-      confidence,
-      reason,
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-    });
-  };
-
-  const safeDuration = durationMs > 0 ? durationMs : 90 * 60 * 1000;
-  for (let startMs = 0; startMs < safeDuration; startMs += 10 * 60 * 1000) {
-    pushCandidate(startMs + 90_000, startMs + 108_000, "possible_attack_sequence", "attack", 0.58, "Regular review marker: sample one long possession window in this match segment.");
-    pushCandidate(startMs + 300_000, startMs + 314_000, "possible_transition", "transition", 0.52, "Regular review marker: check the first actions after a possession change.");
-  }
-
-  for (const event of events) {
-    if (/shot|cross|射门|传中/i.test(event.eventType)) {
-      pushCandidate(event.startMs - 12_000, event.startMs - 2_000, "build_up_before_final_action", "attack", 0.66, "Existing final-action code suggests the buildup before it may be useful.");
-    }
-    if (/corner|free|set_piece|角球|任意球|定位球/i.test(event.eventType)) {
-      pushCandidate(event.startMs, event.endMs + 8_000, "set_piece_second_ball", "set_piece", 0.64, "Existing set-piece code suggests checking the second-ball phase.");
-    }
-  }
-
-  return suggestions.slice(0, 24);
 }
 
 export function previewMigrationFile(sourcePath: string): MigrationPreview {

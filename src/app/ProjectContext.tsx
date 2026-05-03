@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { createDefaultFootballTemplate } from "../../shared/defaultTemplate";
 import type {
   AddEventToPlaylistInput,
-  AiCandidate,
   CodingTemplate,
   CreateEventInput,
   CreatePlayerInput,
@@ -36,7 +35,6 @@ type ProjectState = {
   exportJobs: ExportJob[];
   players: Player[];
   trainingTopics: TrainingTopic[];
-  aiCandidates: AiCandidate[];
   reviewSummary: ReviewSummary | null;
   migrationPreview: MigrationPreview | null;
   recentProjects: RecentProject[];
@@ -65,9 +63,6 @@ type ProjectState = {
   saveCurrentDrawing(input: { eventId?: string; mediaId: string; timeMs: number; layers: DrawingLayer[] }): Promise<void>;
   deleteDrawing(id: string): Promise<void>;
   generateReview(): Promise<void>;
-  generateAiCandidates(): Promise<void>;
-  confirmAiCandidate(id: string): Promise<void>;
-  ignoreAiCandidate(id: string): Promise<void>;
   createPlayer(input: CreatePlayerInput): Promise<void>;
   updatePlayer(id: string, patch: UpdatePlayerInput): Promise<void>;
   generateTrainingTopics(): Promise<void>;
@@ -110,7 +105,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [trainingTopics, setTrainingTopics] = useState<TrainingTopic[]>([]);
-  const [aiCandidates, setAiCandidates] = useState<AiCandidate[]>([]);
   const [reviewSummary, setReviewSummary] = useState<ReviewSummary | null>(null);
   const [migrationPreview, setMigrationPreview] = useState<MigrationPreview | null>(null);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
@@ -144,7 +138,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       setExportJobs(result.exportJobs);
       setPlayers(result.players);
       setTrainingTopics(result.trainingTopics);
-      setAiCandidates(result.aiCandidates);
       setReviewSummary(null);
       setMigrationPreview(null);
       setSelectedEventId(result.events[0]?.id ?? null);
@@ -518,42 +511,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     });
   }, [api, project, run]);
 
-  const generateAiCandidates = useCallback(async () => {
-    if (!api || !project) {
-      return;
-    }
-    await run(async () => {
-      setAiCandidates(await api.ai.generateCandidates(project.id));
-    });
-  }, [api, project, run]);
-
-  const confirmAiCandidate = useCallback(
-    async (id: string) => {
-      if (!api) {
-        return;
-      }
-      await run(async () => {
-        const result = await api.ai.confirmCandidate(id);
-        setEvents((current) => [...current, result.event].toSorted((a, b) => a.startMs - b.startMs));
-        setAiCandidates(result.candidates);
-        setSelectedEventId(result.event.id);
-      });
-    },
-    [api, run],
-  );
-
-  const ignoreAiCandidate = useCallback(
-    async (id: string) => {
-      if (!api) {
-        return;
-      }
-      await run(async () => {
-        setAiCandidates(await api.ai.ignoreCandidate(id));
-      });
-    },
-    [api, run],
-  );
-
   const createPlayer = useCallback(
     async (input: CreatePlayerInput) => {
       if (!api) {
@@ -670,7 +627,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       exportJobs,
       players,
       trainingTopics,
-      aiCandidates,
       reviewSummary,
       migrationPreview,
       recentProjects,
@@ -699,9 +655,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       saveCurrentDrawing,
       deleteDrawing,
       generateReview,
-      generateAiCandidates,
-      confirmAiCandidate,
-      ignoreAiCandidate,
       createPlayer,
       updatePlayer,
       generateTrainingTopics,
@@ -726,7 +679,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       exportJobs,
       players,
       trainingTopics,
-      aiCandidates,
       reviewSummary,
       migrationPreview,
       recentProjects,
@@ -755,9 +707,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       saveCurrentDrawing,
       deleteDrawing,
       generateReview,
-      generateAiCandidates,
-      confirmAiCandidate,
-      ignoreAiCandidate,
       createPlayer,
       updatePlayer,
       generateTrainingTopics,
